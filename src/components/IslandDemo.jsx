@@ -2,6 +2,44 @@ import React, { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { loadModel } from "../lib/assetLoader.js";
 
+// Estrae le mesh reali (geometria + materiale) da un modello caricato, così
+// possiamo costruire un THREE.InstancedMesh per ciascuna sotto-mesh e
+// disegnare N copie con UNA sola chiamata di disegno invece di N cloni
+// separati. Necessario per oggetti come alberi/rocce/cespugli, che vengono
+// ripetuti decine di volte sull'isola: senza istanziazione, ogni copia è una
+// chiamata separata alla GPU, molto più pesante su hardware debole.
+function extractInstanceSources(gltf) {
+  const sources = [];
+  gltf.scene.updateMatrixWorld(true);
+  gltf.scene.traverse((o) => {
+    if (o.isMesh) {
+      sources.push({ geometry: o.geometry, material: o.material, localMatrix: o.matrixWorld.clone() });
+    }
+  });
+  return sources;
+}
+
+// Costruisce gli InstancedMesh per una lista di piazzamenti (una o più varianti
+// dello stesso tipo di oggetto, es. due tipi di albero alternati).
+function buildInstancedVariant(sources, placements, getPlacementMatrix) {
+  const meshes = sources.map(({ geometry, material }) => {
+    const inst = new THREE.InstancedMesh(geometry, material, placements.length);
+    inst.castShadow = true;
+    inst.receiveShadow = true;
+    return inst;
+  });
+  const tmp = new THREE.Matrix4();
+  placements.forEach((p, i) => {
+    const placementMatrix = getPlacementMatrix(p);
+    sources.forEach((src, sIdx) => {
+      tmp.multiplyMatrices(placementMatrix, src.localMatrix);
+      meshes[sIdx].setMatrixAt(i, tmp);
+    });
+  });
+  meshes.forEach((m) => (m.instanceMatrix.needsUpdate = true));
+  return meshes;
+}
+
 // ---------- Deterministic noise helpers (no external noise lib) ----------
 function hash2(x, z) {
   const s = Math.sin(x * 127.1 + z * 311.7) * 43758.5453123;
@@ -90,7 +128,45 @@ export default function IslandDemo() {
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.setSize(width, height);
     renderer.shadowMap.enabled = true;
+    // PCFSoftShadowMap = ombre morbide ma più pesanti. Su hardware debole,
+    // cambia in THREE.BasicShadowMap (nitide ma molto più leggere) o disattiva
+    // del tutto le ombre (shadowMap.enabled = false) per un'ulteriore spinta.
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+    // ---------- Adaptive quality: measure real FPS, downgrade if hardware struggles ----------
+    // Più affidabile di provare a "indovinare" l'hardware in anticipo (core CPU,
+    // nome della GPU, ecc. sono spesso nascosti o fuorvianti): misuriamo il tempo
+    // reale che impiega ogni frame e, se resta basso per un periodo sostenuto,
+    // torniamo ai modelli procedurali — una volta sola, senza continuare a
+    // oscillare avanti e indietro.
+    const FPS_GRACE_SECONDS = 4; // tempo per caricare gli asset e "scaldare" il motore
+    const FPS_SAMPLE_FRAMES = 60; // quanti frame considerare per la media
+    const FPS_THRESHOLD = 24; // sotto questa soglia, downgrade
+    const quality = {
+      downgraded: false,
+      frameTimes: [],
+      groups: [], // { proc: Object3D[], real: Object3D[] }
+      register(proc, real) {
+        this.groups.push({ proc: Array.isArray(proc) ? proc : [proc], real: Array.isArray(real) ? real : [real] });
+      },
+      sample(dt, elapsed) {
+        if (this.downgraded) return;
+        this.frameTimes.push(dt);
+        if (this.frameTimes.length > FPS_SAMPLE_FRAMES) this.frameTimes.shift();
+        if (elapsed < FPS_GRACE_SECONDS || this.frameTimes.length < FPS_SAMPLE_FRAMES) return;
+        const avgDt = this.frameTimes.reduce((a, b) => a + b, 0) / this.frameTimes.length;
+        const avgFps = 1 / avgDt;
+        if (avgFps < FPS_THRESHOLD) {
+          this.downgraded = true;
+          console.info(`[quality] FPS media ${avgFps.toFixed(1)}, sotto soglia (${FPS_THRESHOLD}): torno ai modelli procedurali.`);
+          this.groups.forEach(({ proc, real }) => {
+            proc.forEach((p) => (p.visible = true));
+            real.forEach((r) => (r.visible = false));
+          });
+          renderer.shadowMap.type = THREE.BasicShadowMap; // ombre nitide ma molto più leggere
+        }
+      },
+    };
     mount.appendChild(renderer.domElement);
 
     const scene = new THREE.Scene();
@@ -221,26 +297,34 @@ export default function IslandDemo() {
     scene.add(trunks, foliage);
 
     // swap in the real Pirate-pack-adjacent nature models once loaded, keep the
-    // procedural trunks/foliage above as the fallback if they're not available yet
+    // procedural trunks/foliage above as the fallback if they're not available yet.
+    // Built as InstancedMesh (grouped by variant) instead of individual clones —
+    // same visuals, far fewer draw calls, much friendlier to weaker hardware.
     Promise.all([loadModel("/models/nature/CommonTree_2.gltf"), loadModel("/models/nature/Pine_1.gltf")]).then(
       ([commonTree, pine]) => {
         const variants = [commonTree, pine].filter(Boolean);
         if (variants.length === 0) return; // keep procedural fallback
-        scene.remove(trunks, foliage);
-        treePlacements.forEach((p, i) => {
-          const src = variants[i % variants.length].scene;
-          const model = src.clone(true);
-          model.position.set(p.x, p.h, p.z);
-          model.scale.setScalar(p.scale);
-          model.rotation.y = p.rotY;
-          model.traverse((o) => {
-            if (o.isMesh) {
-              o.castShadow = true;
-              o.receiveShadow = true;
-            }
+        trunks.visible = false;
+        foliage.visible = false;
+        const allRealMeshes = [];
+        const sourcesPerVariant = variants.map(extractInstanceSources);
+        variants.forEach((_, vIdx) => {
+          const placementsForVariant = treePlacements.filter((_, i) => i % variants.length === vIdx);
+          const meshes = buildInstancedVariant(sourcesPerVariant[vIdx], placementsForVariant, (p) => {
+            const m = new THREE.Matrix4();
+            m.compose(
+              new THREE.Vector3(p.x, p.h, p.z),
+              new THREE.Quaternion().setFromEuler(new THREE.Euler(0, p.rotY, 0)),
+              new THREE.Vector3(p.scale, p.scale, p.scale)
+            );
+            return m;
           });
-          scene.add(model);
+          meshes.forEach((m) => {
+            scene.add(m);
+            allRealMeshes.push(m);
+          });
         });
+        quality.register([trunks, foliage], allRealMeshes);
       }
     );
 
@@ -279,21 +363,26 @@ export default function IslandDemo() {
       ([rock1, rock2]) => {
         const variants = [rock1, rock2].filter(Boolean);
         if (variants.length === 0) return;
-        scene.remove(rocks);
-        rockPlacements.forEach((p, i) => {
-          const src = variants[i % variants.length].scene;
-          const model = src.clone(true);
-          model.position.set(p.x, p.centerY, p.z);
-          model.scale.set(p.scale, p.scaleY, p.scale);
-          model.rotation.copy(p.rot);
-          model.traverse((o) => {
-            if (o.isMesh) {
-              o.castShadow = true;
-              o.receiveShadow = true;
-            }
+        rocks.visible = false;
+        const allRealMeshes = [];
+        const sourcesPerVariant = variants.map(extractInstanceSources);
+        variants.forEach((_, vIdx) => {
+          const placementsForVariant = rockPlacements.filter((_, i) => i % variants.length === vIdx);
+          const meshes = buildInstancedVariant(sourcesPerVariant[vIdx], placementsForVariant, (p) => {
+            const m = new THREE.Matrix4();
+            m.compose(
+              new THREE.Vector3(p.x, p.centerY, p.z),
+              new THREE.Quaternion().setFromEuler(p.rot),
+              new THREE.Vector3(p.scale, p.scaleY, p.scale)
+            );
+            return m;
           });
-          scene.add(model);
+          meshes.forEach((m) => {
+            scene.add(m);
+            allRealMeshes.push(m);
+          });
         });
+        quality.register([rocks], allRealMeshes);
       }
     );
 
@@ -344,20 +433,19 @@ export default function IslandDemo() {
 
     loadModel("/models/nature/Bush_Common.gltf").then((gltf) => {
       if (!gltf) return;
-      scene.remove(bushes);
-      bushPlacements.forEach((p) => {
-        const model = gltf.scene.clone(true);
-        model.position.set(p.x, p.h, p.z);
-        model.scale.set(p.scale, p.scale * 0.8, p.scale);
-        model.rotation.y = p.rotY;
-        model.traverse((o) => {
-          if (o.isMesh) {
-            o.castShadow = true;
-            o.receiveShadow = true;
-          }
-        });
-        scene.add(model);
+      bushes.visible = false;
+      const sources = extractInstanceSources(gltf);
+      const meshes = buildInstancedVariant(sources, bushPlacements, (p) => {
+        const m = new THREE.Matrix4();
+        m.compose(
+          new THREE.Vector3(p.x, p.h, p.z),
+          new THREE.Quaternion().setFromEuler(new THREE.Euler(0, p.rotY, 0)),
+          new THREE.Vector3(p.scale, p.scale * 0.8, p.scale)
+        );
+        return m;
       });
+      meshes.forEach((m) => scene.add(m));
+      quality.register([bushes], meshes);
     });
 
     // ---------- Grass tufts (instanced, ground texture) ----------
@@ -528,6 +616,7 @@ export default function IslandDemo() {
         if (o.isMesh) o.castShadow = true;
       });
       character.add(model);
+      quality.register([torsoGroup, headGroup, hipLeft, hipRight, shoulderLeft, shoulderRight], [model]);
       if (gltf.animations?.length) {
         mixer = new THREE.AnimationMixer(model);
         const findClip = (name) => gltf.animations.find((c) => c.name.toLowerCase() === name.toLowerCase());
@@ -727,8 +816,10 @@ export default function IslandDemo() {
     let raf;
     function animate() {
       raf = requestAnimationFrame(animate);
-      const dt = Math.min(0.05, clock.getDelta());
+      const rawDt = clock.getDelta();
+      const dt = Math.min(0.05, rawDt);
       const t = clock.elapsedTime;
+      quality.sample(rawDt, t);
       if (mixer) mixer.update(dt);
 
       // gentle water motion
