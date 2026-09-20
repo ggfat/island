@@ -491,6 +491,197 @@ export default function IslandDemo() {
     }
     scene.add(tufts);
 
+    // ---------- Landmarks: climbable rocky mountains, purely for exploration/orientation ----------
+    const landmarkMat = new THREE.MeshToonMaterial({ color: "#9a8f82", gradientMap });
+    const platformMat = new THREE.MeshToonMaterial({ color: "#cdbfa8", gradientMap });
+    function buildSpire(x, z, h, segs) {
+      const g = new THREE.Group();
+      g.position.set(x, h, z);
+      const spacing = 0.8; // vertical gap between steps: comfortably under the ~1.2 unit max jump height
+
+      // wide base skirt: extra bulk around the bottom so the mountain is
+      // genuinely wide, and fully solid (registered as obstacles too)
+      for (let i = 0; i < 7; i++) {
+        const a = (i / 7) * Math.PI * 2 + rand() * 0.4;
+        const r = 1.9 + rand() * 0.7;
+        const bx = Math.cos(a) * r,
+          bz = Math.sin(a) * r;
+        const bs = 1.3 + rand() * 0.5;
+        const boulder = mesh(new THREE.IcosahedronGeometry(bs, 0), landmarkMat, bx, 0.6, bz);
+        boulder.rotation.set(rand() * Math.PI, rand() * Math.PI, rand() * Math.PI);
+        boulder.scale.set(1, 0.65 + rand() * 0.25, 1);
+        g.add(boulder);
+        obstacles.push({ x: x + bx, z: z + bz, r: bs * 0.85, top: h + 0.6 + bs * 0.5, kind: "landmark" });
+      }
+
+      // spiral staircase: each step is a real, wide boulder (both the rock mass
+      // AND the collision), topped with a lighter flat cap so it's obvious
+      // where to land
+      let angle = rand() * Math.PI * 2;
+      let topY = h;
+      for (let i = 0; i < segs; i++) {
+        angle += (85 * Math.PI) / 180 + (rand() - 0.5) * 0.25;
+        const radius = 1.6 - (i * 1.0) / segs;
+        const lx = Math.cos(angle) * radius;
+        const lz = Math.sin(angle) * radius;
+        const stepSize = 1.1 - (i / segs) * 0.35;
+        const ly = i * spacing + 1.1;
+        const boulder = mesh(new THREE.IcosahedronGeometry(stepSize, 0), landmarkMat, lx, ly, lz);
+        boulder.rotation.set(rand() * Math.PI, rand() * Math.PI, rand() * Math.PI);
+        boulder.scale.set(1, 0.72, 1);
+        g.add(boulder);
+        const capY = ly + stepSize * 0.62;
+        const cap = mesh(new THREE.CylinderGeometry(stepSize * 0.78, stepSize * 0.88, 0.14, 8), platformMat, lx, capY, lz);
+        g.add(cap);
+        const blockTop = h + capY + 0.07;
+        obstacles.push({ x: x + lx, z: z + lz, r: stepSize * 0.85, top: blockTop, kind: "landmark" });
+        topY = blockTop;
+      }
+      const platform = mesh(new THREE.CylinderGeometry(1.2, 1.3, 0.18, 10), platformMat, 0, topY - h + 0.09, 0);
+      g.add(platform);
+      obstacles.push({ x, z, r: 1.15, top: topY + 0.18, kind: "landmark" });
+      scene.add(g);
+      return { x, z, y: topY + 0.18 };
+    }
+    const spire1Top = buildSpire(ISLAND_R * -0.5, ISLAND_R * 0.35, islandHeight(ISLAND_R * -0.5, ISLAND_R * 0.35), 5);
+    buildSpire(ISLAND_R * 0.3, ISLAND_R * -0.6, islandHeight(ISLAND_R * 0.3, ISLAND_R * -0.6), 3);
+
+    // ---------- Ambient wildlife (purely decorative, no gameplay) ----------
+    const crabMat = new THREE.MeshToonMaterial({ color: "#e2543a", gradientMap });
+    const crabs = [];
+    for (let i = 0; i < 7; i++) {
+      let x, z, h;
+      do {
+        x = (rand() * 2 - 1) * ISLAND_R * 0.95;
+        z = (rand() * 2 - 1) * ISLAND_R * 0.95;
+        h = islandHeight(x, z);
+      } while (h < 0.02 || h > 0.35 || Math.hypot(x, z) > ISLAND_R * 0.99);
+      const g = new THREE.Group();
+      const body = mesh(new THREE.SphereGeometry(0.17, 10, 8), crabMat, 0, 0.1, 0);
+      body.scale.set(1, 0.55, 0.8);
+      g.add(body);
+      [-1, 1].forEach((side) => {
+        for (let l = 0; l < 3; l++) {
+          const leg = mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.16, 5), crabMat, side * 0.16, 0.05, (l - 1) * 0.07);
+          leg.rotation.z = side * 1.0;
+          leg.rotation.y = (l - 1) * 0.3;
+          g.add(leg);
+        }
+      });
+      [-1, 1].forEach((s) => {
+        const claw = mesh(new THREE.SphereGeometry(0.075, 8, 6), crabMat, s * 0.22, 0.13, 0.11);
+        claw.scale.set(1.3, 0.8, 0.9);
+        g.add(claw);
+      });
+      g.position.set(x, h + 0.11, z);
+      scene.add(g);
+      crabs.push({ g, home: { x, z }, target: { x, z }, pauseUntil: 0, phase: rand() * 10 });
+    }
+
+    const birdMat = new THREE.MeshToonMaterial({ color: "#f4f1ea", gradientMap });
+    const birds = [];
+    for (let i = 0; i < 6; i++) {
+      const g = new THREE.Group();
+      const body = mesh(new THREE.ConeGeometry(0.09, 0.4, 6), birdMat, 0, 0, 0);
+      body.rotation.x = Math.PI / 2;
+      g.add(body);
+      const wingL = mesh(new THREE.BoxGeometry(0.42, 0.015, 0.15), birdMat, -0.23, 0, 0);
+      const wingR = mesh(new THREE.BoxGeometry(0.42, 0.015, 0.15), birdMat, 0.23, 0, 0);
+      g.add(wingL, wingR);
+      scene.add(g);
+      birds.push({
+        g,
+        wingL,
+        wingR,
+        center: { x: (rand() * 2 - 1) * ISLAND_R * 0.4, z: (rand() * 2 - 1) * ISLAND_R * 0.4 },
+        radius: 6 + rand() * 10,
+        height: 8 + rand() * 4,
+        speed: 0.25 + rand() * 0.2,
+        phase: rand() * Math.PI * 2,
+        flapPhase: rand() * 10,
+      });
+    }
+
+    const fishMat = new THREE.MeshToonMaterial({ color: "#6fb0d8", gradientMap });
+    const fish = [];
+    for (let i = 0; i < 10; i++) {
+      const ang = rand() * Math.PI * 2;
+      const rr = ISLAND_R * (0.99 + rand() * 0.08);
+      const g = new THREE.Group();
+      const fbody = mesh(new THREE.ConeGeometry(0.11, 0.4, 6), fishMat, 0, 0, 0);
+      fbody.rotation.x = Math.PI / 2;
+      g.add(fbody);
+      const tail = mesh(new THREE.ConeGeometry(0.1, 0.16, 4), fishMat, 0, 0, -0.24);
+      tail.rotation.x = Math.PI / 2;
+      g.add(tail);
+      g.add(mesh(new THREE.ConeGeometry(0.055, 0.14, 3), fishMat, 0, 0.09, 0.02));
+      g.position.set(Math.cos(ang) * rr, -0.35, Math.sin(ang) * rr);
+      scene.add(g);
+      fish.push({ g, angle: ang, radius: rr, speed: (0.15 + rand() * 0.15) * (rand() < 0.5 ? 1 : -1), bob: rand() * 10 });
+    }
+
+    // ---------- Hidden treasure chests: purely for curiosity, cosmetic-only reward, no obligation ----------
+    const chestMat = new THREE.MeshToonMaterial({ color: "#7a5a3a", gradientMap });
+    const chestBandMat = new THREE.MeshToonMaterial({ color: "#d4af37", gradientMap });
+    const TREASURE_REWARDS = ["Bandana del Corsaro", "Amuleto di Corallo", "Moneta Antica", "Cannocchiale d'Ottone"];
+    const treasures = [];
+    function buildChest(x, z, h, label) {
+      const g = new THREE.Group();
+      g.position.set(x, h, z);
+      g.add(mesh(new THREE.BoxGeometry(0.42, 0.26, 0.3), chestMat, 0, 0.13, 0));
+      const lidPivot = new THREE.Group();
+      lidPivot.position.set(0, 0.26, -0.15);
+      const lid = mesh(new THREE.CylinderGeometry(0.15, 0.15, 0.42, 8, 1, false, 0, Math.PI), chestMat, 0, 0, 0.15);
+      lid.rotation.z = Math.PI / 2;
+      lidPivot.add(lid);
+      g.add(lidPivot);
+      g.add(mesh(new THREE.BoxGeometry(0.44, 0.04, 0.06), chestBandMat, 0, 0.13, 0.16));
+      g.add(mesh(new THREE.BoxGeometry(0.44, 0.04, 0.06), chestBandMat, 0, 0.13, -0.16));
+      const marker = mesh(new THREE.OctahedronGeometry(0.09, 0), chestBandMat, 0, 0.7, 0);
+      g.add(marker);
+      scene.add(g);
+      const obstacle = { x, z, r: 0.3, top: h + 0.26, kind: "chest" };
+      obstacles.push(obstacle);
+      treasures.push({ g, marker, lidPivot, x, z, h, label, opened: false, openedAt: -1, obstacle });
+    }
+    buildChest(spire1Top.x + 1.0, spire1Top.z + 0.4, spire1Top.y, TREASURE_REWARDS[0]);
+    buildChest(ISLAND_R * -0.82, ISLAND_R * -0.15, islandHeight(ISLAND_R * -0.82, ISLAND_R * -0.15), TREASURE_REWARDS[1]);
+    buildChest(ISLAND_R * 0.1, ISLAND_R * 0.88, islandHeight(ISLAND_R * 0.1, ISLAND_R * 0.88), TREASURE_REWARDS[2]);
+    buildChest(ISLAND_R * -0.25, ISLAND_R * 0.7, islandHeight(ISLAND_R * -0.25, ISLAND_R * 0.7), TREASURE_REWARDS[3]);
+
+    // ---------- Fishing spots: a relaxed side activity, no purpose beyond itself ----------
+    const bobberMat = new THREE.MeshBasicMaterial({ color: "#ff5c4d" });
+    const rippleMat = new THREE.MeshBasicMaterial({ color: "#dfe9e6", transparent: true, opacity: 0.5, side: THREE.DoubleSide });
+    const rodMat = new THREE.MeshToonMaterial({ color: "#5a4432", gradientMap });
+    const rodGeo = new THREE.CylinderGeometry(0.02, 0.032, 1.8, 6);
+    rodGeo.translate(0, 0.9, 0);
+    const fishingSpots = [];
+    function buildFishingSpot(x, z) {
+      const bobber = mesh(new THREE.SphereGeometry(0.09, 8, 6), bobberMat, x, -0.55, z);
+      scene.add(bobber);
+      const ripple = mesh(new THREE.RingGeometry(0.14, 0.22, 12), rippleMat, x, -0.53, z);
+      ripple.rotation.x = -Math.PI / 2;
+      scene.add(ripple);
+      const ang = Math.atan2(z, x);
+      const shoreR = Math.hypot(x, z) * 0.94;
+      const sx = Math.cos(ang) * shoreR,
+        sz = Math.sin(ang) * shoreR;
+      const sh = islandHeight(sx, sz);
+      const rod = new THREE.Mesh(rodGeo, rodMat);
+      rod.position.set(sx, sh, sz);
+      rod.castShadow = true;
+      const tiltAxis = new THREE.Vector3(-Math.sin(ang), 0, Math.cos(ang));
+      rod.quaternion.setFromAxisAngle(tiltAxis, Math.PI * 0.24);
+      scene.add(rod);
+      fishingSpots.push({ bobber, ripple, x, z, casting: false, biteAt: -1 });
+    }
+    for (let i = 0; i < 4; i++) {
+      const ang = (i / 4) * Math.PI * 2 + 0.4;
+      buildFishingSpot(Math.cos(ang) * ISLAND_R * 1.01, Math.sin(ang) * ISLAND_R * 1.01);
+    }
+    let fishCaught = 0;
+    let treasuresFound = 0;
+
     // ---------- Character (low-poly humanoid, joint-based rig, chibi proportions) ----------
     const character = new THREE.Group();
     const jacketMat = new THREE.MeshToonMaterial({ color: PALETTE.jacket, gradientMap });
@@ -794,6 +985,111 @@ export default function IslandDemo() {
       jumpBtn.style.background = "rgba(35,40,38,0.38)";
     });
     mount.appendChild(jumpBtn);
+
+    // action button — only for the two purely-optional discoveries (chests, fishing)
+    const actionBtn = document.createElement("div");
+    actionBtn.textContent = "APRI";
+    Object.assign(actionBtn.style, {
+      position: "fixed",
+      right: "24px",
+      bottom: "124px",
+      width: "76px",
+      height: "76px",
+      borderRadius: "50%",
+      background: "rgba(35,40,38,0.38)",
+      border: "2px solid rgba(255,211,92,0.85)",
+      color: "#fff",
+      fontFamily: "system-ui, sans-serif",
+      fontSize: "11px",
+      fontWeight: "700",
+      letterSpacing: "0.5px",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      textAlign: "center",
+      userSelect: "none",
+      touchAction: "none",
+      zIndex: 22,
+      opacity: "0",
+      pointerEvents: "none",
+      transition: "opacity 0.15s",
+    });
+    let actionRequested = false;
+    actionBtn.addEventListener("pointerdown", (e) => {
+      e.stopPropagation();
+      actionRequested = true;
+      actionBtn.style.background = "rgba(255,211,92,0.55)";
+    });
+    actionBtn.addEventListener("pointerup", (e) => {
+      e.stopPropagation();
+      actionBtn.style.background = "rgba(35,40,38,0.38)";
+    });
+    mount.appendChild(actionBtn);
+
+    // small, low-key counters — just a record of what you've found, no goal attached
+    const discoveryBar = document.createElement("div");
+    Object.assign(discoveryBar.style, {
+      position: "fixed",
+      top: "16px",
+      left: "16px",
+      display: "flex",
+      gap: "10px",
+      fontFamily: "system-ui, sans-serif",
+      fontSize: "13px",
+      fontWeight: "700",
+      color: "#fff",
+      zIndex: 20,
+    });
+    function makePill(color) {
+      const pill = document.createElement("div");
+      Object.assign(pill.style, {
+        background: "rgba(35,40,38,0.5)",
+        borderRadius: "999px",
+        padding: "6px 12px",
+        display: "flex",
+        alignItems: "center",
+        gap: "6px",
+      });
+      const dot = document.createElement("span");
+      Object.assign(dot.style, { width: "10px", height: "10px", borderRadius: "50%", background: color, display: "inline-block" });
+      const text = document.createElement("span");
+      text.textContent = "0";
+      pill.appendChild(dot);
+      pill.appendChild(text);
+      discoveryBar.appendChild(pill);
+      return text;
+    }
+    const treasureLabel = makePill("#d4af37");
+    treasureLabel.textContent = "0/4";
+    mount.appendChild(discoveryBar);
+
+    // small toast for pickup feedback
+    const toast = document.createElement("div");
+    Object.assign(toast.style, {
+      position: "fixed",
+      bottom: "150px",
+      left: "50%",
+      transform: "translateX(-50%)",
+      background: "rgba(20,24,22,0.7)",
+      color: "#f4f1ea",
+      padding: "8px 16px",
+      borderRadius: 999,
+      fontFamily: "system-ui, sans-serif",
+      fontSize: 13,
+      zIndex: 30,
+      opacity: "0",
+      transition: "opacity 0.2s",
+      pointerEvents: "none",
+      whiteSpace: "nowrap",
+    });
+    mount.appendChild(toast);
+    let toastTimeout = null;
+    function showToast(msg) {
+      toast.textContent = msg;
+      toast.style.opacity = "1";
+      clearTimeout(toastTimeout);
+      toastTimeout = setTimeout(() => (toast.style.opacity = "0"), 1800);
+    }
     function setJoyVisual(baseX, baseY, nx, ny, visible) {
       joyBase.style.left = baseX + "px";
       joyBase.style.top = baseY + "px";
@@ -805,6 +1101,8 @@ export default function IslandDemo() {
 
     // ---------- Animation loop ----------
     const clock = new THREE.Clock();
+    const dayColorTmp = new THREE.Color();
+    const duskColorTmp = new THREE.Color();
     let walkPhase = 0;
     let walkAmp = 0;
     let vy = 0;
@@ -821,6 +1119,56 @@ export default function IslandDemo() {
       const t = clock.elapsedTime;
       quality.sample(rawDt, t);
       if (mixer) mixer.update(dt);
+
+      // ---------- Day/night cycle ----------
+      const DAY_CYCLE_SECONDS = 900; // 15 min full loop — slow enough not to feel jarring
+      const dayPhase = (t % DAY_CYCLE_SECONDS) / DAY_CYCLE_SECONDS;
+      const sunAngle = dayPhase * Math.PI * 2;
+      const sunHeight = Math.sin(sunAngle);
+      sun.position.set(Math.cos(sunAngle) * 34, Math.max(sunHeight, -0.15) * 30 + 10, Math.sin(sunAngle) * 16);
+      const dayFactor = smoothstep(-0.22, 0.3, sunHeight);
+      const duskFactor = Math.max(0, 1 - Math.abs(sunHeight) * 2.6);
+      sun.intensity = 0.4 + dayFactor * 0.8;
+      sun.color.set("#7a8ab0").lerp(dayColorTmp.set("#fff3da"), dayFactor).lerp(duskColorTmp.set("#ff9a5c"), duskFactor * 0.55);
+      hemi.intensity = 0.55 + dayFactor * 0.55;
+      hemi.color.set("#4a5578").lerp(dayColorTmp.set("#dfe8e6"), dayFactor);
+      skyMat.color.set("#3a4568").lerp(dayColorTmp.set("#ffffff"), dayFactor).lerp(duskColorTmp.set("#ffb27a"), duskFactor * 0.45);
+      scene.fog.color.copy(skyMat.color).lerp(dayColorTmp.set(PALETTE.fog), dayFactor * 0.4);
+
+      // ---------- Ambient wildlife ----------
+      crabs.forEach((c) => {
+        if (t > c.pauseUntil) {
+          const dx = c.g.position.x - c.target.x,
+            dz = c.g.position.z - c.target.z;
+          if (Math.hypot(dx, dz) < 0.05) {
+            const ang = rand() * Math.PI * 2;
+            const dist = 0.6 + rand() * 1.4;
+            c.target = { x: c.home.x + Math.cos(ang) * dist, z: c.home.z + Math.sin(ang) * dist };
+            c.pauseUntil = t + 0.6 + rand() * 1.8;
+          } else {
+            const step = Math.min(1, dt * 1.8);
+            c.g.position.x += (c.target.x - c.g.position.x) * step;
+            c.g.position.z += (c.target.z - c.g.position.z) * step;
+            c.g.position.y = islandHeight(c.g.position.x, c.g.position.z) + 0.11 + Math.abs(Math.sin(t * 14 + c.phase)) * 0.02;
+            c.g.rotation.y = Math.atan2(c.target.x - c.g.position.x, c.target.z - c.g.position.z) + Math.PI / 2;
+          }
+        }
+      });
+      birds.forEach((b) => {
+        const ang = t * b.speed + b.phase;
+        b.g.position.set(b.center.x + Math.cos(ang) * b.radius, b.height, b.center.z + Math.sin(ang) * b.radius);
+        b.g.rotation.y = ang + Math.PI / 2;
+        const flap = Math.sin(t * 10 + b.flapPhase) * 0.6;
+        b.wingL.rotation.z = flap;
+        b.wingR.rotation.z = -flap;
+      });
+      fish.forEach((f) => {
+        f.angle += f.speed * dt * 0.3;
+        f.g.position.x = Math.cos(f.angle) * f.radius;
+        f.g.position.z = Math.sin(f.angle) * f.radius;
+        f.g.position.y = -0.35 + Math.sin(t * 1.5 + f.bob) * 0.06;
+        f.g.rotation.y = f.angle + (f.speed > 0 ? Math.PI / 2 : -Math.PI / 2);
+      });
 
       // gentle water motion
       const arr = waterGeo.attributes.position.array;
@@ -950,6 +1298,93 @@ export default function IslandDemo() {
         shoulderRight.rotation.x = -0.5 - 0.4 * apex;
       }
 
+      // ---------- Optional discoveries: chests and fishing — purely for curiosity ----------
+      const INTERACT_RANGE = 1.7;
+      let nearest = null;
+      let nearestDist = INTERACT_RANGE;
+      treasures.forEach((tr) => {
+        if (tr.opened) {
+          const openT = t - tr.openedAt;
+          const p = Math.min(1, openT / 0.5);
+          tr.lidPivot.rotation.x = -p * Math.PI * 0.65;
+          if (tr.marker.visible) {
+            const popT = Math.min(1, openT / 0.4);
+            tr.marker.position.y = 0.7 + popT * 0.5;
+            tr.marker.rotation.y += dt * 6;
+            tr.marker.scale.setScalar(1 + popT * 0.8);
+            if (openT > 0.9) tr.marker.visible = false;
+          }
+          return;
+        }
+        tr.marker.rotation.y += dt * 1.2;
+        tr.marker.position.y = 0.7 + Math.sin(t * 2 + tr.x) * 0.08;
+        const dx = character.position.x - tr.x,
+          dz = character.position.z - tr.z;
+        const dist = Math.hypot(dx, dz);
+        if (dist < INTERACT_RANGE && dist < nearestDist + 0.9) {
+          nearestDist = Math.min(nearestDist, dist);
+          nearest = { type: "treasure", ref: tr };
+        }
+      });
+      fishingSpots.forEach((sp) => {
+        sp.ripple.rotation.z += dt * 0.3;
+        const rippleScale = 1 + Math.sin(t * 1.5 + sp.x) * 0.15;
+        sp.ripple.scale.set(rippleScale, rippleScale, 1);
+        if (sp.biteAt >= 0 && t < sp.biteAt + 0.3) {
+          sp.bobber.position.y = -0.68;
+        } else {
+          sp.bobber.position.y = -0.55 + Math.sin(t * 3 + sp.x) * 0.03;
+        }
+        if (sp.casting) return;
+        const dx = character.position.x - sp.x,
+          dz = character.position.z - sp.z;
+        const dist = Math.hypot(dx, dz);
+        if (dist < nearestDist) {
+          nearestDist = dist;
+          nearest = { type: "fish", ref: sp };
+        }
+      });
+
+      if (nearest) {
+        actionBtn.style.opacity = "1";
+        actionBtn.style.pointerEvents = "auto";
+        actionBtn.textContent = nearest.type === "treasure" ? "APRI" : "PESCA";
+      } else {
+        actionBtn.style.opacity = "0";
+        actionBtn.style.pointerEvents = "none";
+      }
+
+      if (actionRequested && nearest) {
+        if (nearest.type === "treasure") {
+          const tr = nearest.ref;
+          tr.opened = true;
+          tr.openedAt = t;
+          tr.obstacle.r = 0;
+          treasuresFound++;
+          treasureLabel.textContent = `${treasuresFound}/${treasures.length}`;
+          showToast(`Tesoro trovato: ${tr.label}!`);
+        } else {
+          const sp = nearest.ref;
+          sp.casting = true;
+          showToast("Lanci la lenza...");
+          const biteDelay = 1.1 + rand() * 0.6;
+          setTimeout(() => {
+            sp.biteAt = clock.elapsedTime;
+          }, biteDelay * 1000);
+          setTimeout(() => {
+            sp.casting = false;
+            sp.biteAt = -1;
+            if (rand() < 0.65) {
+              fishCaught++;
+              showToast(`Hai pescato qualcosa! (${fishCaught} finora)`);
+            } else {
+              showToast("Niente, per questa volta.");
+            }
+          }, (biteDelay + 0.4) * 1000);
+        }
+      }
+      actionRequested = false;
+
       updateCamera(dt);
       if (idleAction || walkAction || jumpAction) {
         if (!grounded) setAction(jumpAction ?? walkAction ?? idleAction);
@@ -981,6 +1416,10 @@ export default function IslandDemo() {
       mount.removeChild(joyBase);
       mount.removeChild(joyNub);
       mount.removeChild(jumpBtn);
+      mount.removeChild(actionBtn);
+      mount.removeChild(discoveryBar);
+      mount.removeChild(toast);
+      clearTimeout(toastTimeout);
       renderer.dispose();
       if (mount.contains(dom)) mount.removeChild(dom);
     };
