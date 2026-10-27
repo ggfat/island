@@ -1,6 +1,6 @@
 import React from "react";
-import IslandDemo from "./components/IslandDemo.jsx";
+import PlanetDemo from "./components/PlanetDemo.jsx";
 
 export default function App() {
-  return <IslandDemo />;
+  return <PlanetDemo />;
 }
