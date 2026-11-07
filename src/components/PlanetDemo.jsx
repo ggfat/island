@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { loadModel } from "../lib/assetLoader.js";
+import { createAudio } from "../lib/audio.js";
 
 // Draws N copies of a loaded model with ONE draw call (InstancedMesh) instead of N clones.
 function extractInstanceSources(gltf) {
@@ -1207,7 +1208,62 @@ export default function PlanetDemo() {
       fadeEl.style.opacity = "0";
     }
 
+    // ---------- Audio ----------
+    const audio = createAudio();
+    const startAudio = () => audio.start();
+    window.addEventListener("pointerdown", startAudio);
+    window.addEventListener("keydown", startAudio);
+    const muteBtn = document.createElement("div");
+    muteBtn.textContent = "\u{1F50A}";
+    Object.assign(muteBtn.style, {
+      position: "absolute", top: "12px", right: "12px", width: "40px", height: "40px", borderRadius: "50%",
+      background: "rgba(35,40,38,0.38)", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center",
+      fontSize: "20px", cursor: "pointer", userSelect: "none", touchAction: "none", zIndex: 22,
+    });
+    muteBtn.addEventListener("pointerdown", (e) => {
+      e.stopPropagation();
+      audio.start();
+      muteBtn.textContent = audio.toggleMute() ? "\u{1F507}" : "\u{1F50A}";
+    });
+    mount.appendChild(muteBtn);
+
+    // ---------- Polvere (passi e atterraggio) ----------
+    const dustGeo = new THREE.SphereGeometry(0.12, 6, 5);
+    const dust = [];
+    for (let i = 0; i < 16; i++) {
+      const m = new THREE.Mesh(dustGeo, new THREE.MeshBasicMaterial({ color: "#e8dcc0", transparent: true, opacity: 0, depthWrite: false }));
+      m.visible = false;
+      scene.add(m);
+      dust.push({ m, vel: new THREE.Vector3(), life: 0, max: 0.6 });
+    }
+    let dustIdx = 0;
+    function puff(pos, up, count, spread) {
+      for (let i = 0; i < count; i++) {
+        const d = dust[dustIdx++ % dust.length];
+        d.m.position.copy(pos);
+        d.vel.set(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).multiplyScalar(spread).addScaledVector(up, 0.5 + Math.random() * 0.6);
+        d.life = d.max = 0.45 + Math.random() * 0.3;
+        d.m.visible = true;
+      }
+    }
+    function updateDust(dt) {
+      for (const d of dust) {
+        if (d.life <= 0) continue;
+        d.life -= dt;
+        if (d.life <= 0) { d.m.visible = false; continue; }
+        const k = d.life / d.max;
+        d.m.position.addScaledVector(d.vel, dt);
+        d.m.scale.setScalar(0.6 + (1 - k) * 1.2);
+        d.m.material.opacity = k * 0.5;
+      }
+    }
+
     // ---------- Animation loop ----------
+    let curSpeed = 0; // 0..1 velocita' corrente (accelerazione morbida)
+    const lastMoveDir = new THREE.Vector3();
+    let stepAcc = 0;
+    let landSquash = 0;
+    let wasGrounded = true;
     const clock = new THREE.Clock();
     const dayColorTmp = new THREE.Color();
     const duskColorTmp = new THREE.Color();
@@ -1240,6 +1296,7 @@ export default function PlanetDemo() {
       const out = b.exitDir.clone().sub(centerDir);
       out.addScaledVector(b.exitDir, -out.dot(b.exitDir)).normalize();
       inside = { room, returnDir: b.exitDir.clone(), returnFacing: out };
+      audio.enter();
       inPos.set(0, 0, -room.D / 2 + 1.4);
       inHeading.set(0, 0, 1);
       jumpHeight = 0;
@@ -1262,6 +1319,7 @@ export default function PlanetDemo() {
       stage.visible = false;
       roomLight.intensity = 0;
       inside = null;
+      audio.exit();
       jumpHeight = 0;
       jumpVel = 0;
       grounded = true;
@@ -1389,6 +1447,8 @@ export default function PlanetDemo() {
         blob.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), new THREE.Vector3(0, 1, 0));
         blob.scale.setScalar(Math.max(0.4, 1 - jumpHeight * 0.25));
         animateLimbs(moving, dt);
+        audio.update(dt, 0, dayFactor, true);
+        character.scale.set(1, 1, 1);
 
         // fixed cutaway camera, distance adapted to the screen shape so the whole room always fits
         const tanV = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
@@ -1436,24 +1496,32 @@ export default function PlanetDemo() {
       const DEAD_ZONE = 0.08;
 
       let moving = false;
+      let inputMag = 0;
       if (mlen > DEAD_ZONE) {
         const nx = mx / Math.max(mlen, 1);
         const ny = my / Math.max(mlen, 1);
-        const inputMag = Math.min(1, mlen);
-        const moveDir = new THREE.Vector3().addScaledVector(facing, -ny).addScaledVector(right, nx);
-        if (moveDir.lengthSq() > 0.0001) {
-          moveDir.normalize();
-          charFacing.lerp(moveDir, Math.min(1, dt * 6 * inputMag)).addScaledVector(charDir, -charFacing.dot(charDir)).normalize();
-          const base = charDir.clone().multiplyScalar(groundRadiusAt(charDir) + jumpHeight);
-          const attempts = [moveDir, new THREE.Vector3().addScaledVector(facing, -ny).normalize(), new THREE.Vector3().addScaledVector(right, nx).normalize()];
-          for (const attempt of attempts) {
-            if (attempt.lengthSq() < 0.0001) continue;
-            const candidateDir = base.clone().addScaledVector(attempt, MOVE_SPEED * dt * inputMag).normalize();
-            if (!isBlocked(candidateDir) && terrainHeight(candidateDir) > SEA_LEVEL - 0.35) {
-              charDir = candidateDir;
-              moving = true;
-              break;
-            }
+        inputMag = Math.min(1, mlen);
+        lastMoveDir.set(0, 0, 0).addScaledVector(facing, -ny).addScaledVector(right, nx);
+        if (lastMoveDir.lengthSq() > 0.0001) {
+          lastMoveDir.normalize();
+          charFacing.lerp(lastMoveDir, Math.min(1, dt * 6 * inputMag)).addScaledVector(charDir, -charFacing.dot(charDir)).normalize();
+        } else inputMag = 0;
+      }
+      // accelerazione/frenata morbide
+      curSpeed += (inputMag - curSpeed) * Math.min(1, dt * (inputMag > curSpeed ? 9 : 12));
+      if (curSpeed < 0.02 && inputMag === 0) curSpeed = 0;
+      if (curSpeed > 0 && lastMoveDir.lengthSq() > 0.0001) {
+        const mv = lastMoveDir;
+        const base = charDir.clone().multiplyScalar(groundRadiusAt(charDir) + jumpHeight);
+        const fwd = mv.dot(facing), rgt = mv.dot(right);
+        const attempts = [mv, new THREE.Vector3().addScaledVector(facing, fwd).normalize(), new THREE.Vector3().addScaledVector(right, rgt).normalize()];
+        for (const attempt of attempts) {
+          if (attempt.lengthSq() < 0.0001) continue;
+          const candidateDir = base.clone().addScaledVector(attempt, MOVE_SPEED * dt * curSpeed).normalize();
+          if (!isBlocked(candidateDir) && terrainHeight(candidateDir) > SEA_LEVEL - 0.35) {
+            charDir = candidateDir;
+            moving = true;
+            break;
           }
         }
       }
@@ -1462,8 +1530,10 @@ export default function PlanetDemo() {
       if (jumpRequested && grounded) {
         jumpVel = JUMP_SPEED;
         grounded = false;
+        audio.jump();
       }
       jumpRequested = false;
+      const impactVel = jumpVel;
       jumpVel -= GRAVITY * dt;
       jumpHeight += jumpVel * dt;
       if (jumpHeight <= 0) {
@@ -1471,6 +1541,8 @@ export default function PlanetDemo() {
         jumpVel = 0;
         grounded = true;
       }
+      const justLanded = grounded && !wasGrounded;
+      wasGrounded = grounded;
 
       const groundR = groundRadiusAt(charDir);
       const charPos = charDir.clone().multiplyScalar(groundR + jumpHeight);
@@ -1485,6 +1557,29 @@ export default function PlanetDemo() {
       blob.scale.setScalar(Math.max(0.4, 1 - jumpHeight * 0.25));
 
       animateLimbs(moving, dt);
+
+      // passi + polvere, atterraggio morbido (squash)
+      if (moving && grounded) {
+        stepAcc += MOVE_SPEED * curSpeed * dt;
+        if (stepAcc > 1.2) {
+          stepAcc = 0;
+          audio.step();
+          puff(blob.position, charDir, 2, 0.5);
+        }
+      } else if (!moving) stepAcc = 1.0;
+      if (justLanded) {
+        const power = Math.min(1, Math.abs(impactVel) / JUMP_SPEED);
+        landSquash = power;
+        audio.land(power);
+        puff(blob.position, charDir, 6, 1.4);
+      }
+      landSquash = Math.max(0, landSquash - dt * 5);
+      character.scale.set(1 + 0.12 * landSquash, 1 - 0.2 * landSquash, 1 + 0.12 * landSquash);
+      updateDust(dt);
+      {
+        const h = terrainHeight(charDir);
+        audio.update(dt, Math.max(0.05, Math.min(1, 1 - (h - SEA_LEVEL) / 2.5)), dayFactor, false);
+      }
 
       let nearBuilding = null;
       let nearDist = 3.4;
@@ -1542,6 +1637,9 @@ export default function PlanetDemo() {
       mount.removeChild(lookVisual.nub);
       mount.removeChild(jumpBtn);
       mount.removeChild(actionBtn);
+      mount.removeChild(muteBtn);
+      window.removeEventListener("pointerdown", startAudio);
+      window.removeEventListener("keydown", startAudio);
       mount.removeChild(fadeEl);
       renderer.dispose();
       if (mount.contains(dom)) mount.removeChild(dom);
