@@ -2,8 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { loadModel } from "../lib/assetLoader.js";
 
-// Extracts the real meshes (geometry + material) from a loaded model so we can draw
-// N copies with ONE draw call (InstancedMesh) instead of N separate clones.
+// Draws N copies of a loaded model with ONE draw call (InstancedMesh) instead of N clones.
 function extractInstanceSources(gltf) {
   const sources = [];
   gltf.scene.updateMatrixWorld(true);
@@ -138,8 +137,12 @@ export default function PlanetDemo() {
     sun.shadow.camera.right = 20;
     sun.shadow.camera.top = 20;
     sun.shadow.camera.bottom = -20;
-    sun.shadow.camera.far = 60;
+    sun.shadow.camera.near = 1;
+    sun.shadow.camera.far = 140;
+    sun.shadow.bias = -0.0008;
     scene.add(sun);
+    scene.add(sun.target);
+    const sunDirVec = new THREE.Vector3(0.5, 0.8, 0.3).normalize();
 
     // ---------- Planet: an icosahedron displaced by seamless noise, so it reads ----------
     // as a small rocky/grassy world you can walk all the way around
@@ -149,7 +152,7 @@ export default function PlanetDemo() {
     const rockC = new THREE.Color(PALETTE.rock);
     const snowC = new THREE.Color(PALETTE.snow);
 
-    const planetGeo = new THREE.IcosahedronGeometry(PLANET_R, 6);
+    const planetGeo = new THREE.IcosahedronGeometry(PLANET_R, 40);
     const posAttr = planetGeo.attributes.position;
     const dir = new THREE.Vector3();
     const colors = [];
@@ -173,25 +176,27 @@ export default function PlanetDemo() {
     scene.add(planet);
     planet.updateMatrixWorld(true);
 
-    // Finds the EXACT point on the real rendered mesh in a given direction,
-    // instead of trusting the analytic noise formula — with a low-poly mesh,
-    // those two can disagree slightly between vertices, which is what was
-    // making trees/rocks look like they float or sink a little.
-    const raycaster = new THREE.Raycaster();
+    // Surface point + smooth normal computed from the same terrain formula the mesh is built from.
+    // With the fine mesh above it matches the rendered ground to ~1 cm, so nothing floats or sinks.
     function getSurfacePoint(d) {
-      raycaster.set(d.clone().multiplyScalar(PLANET_R * 3), d.clone().negate());
-      raycaster.far = PLANET_R * 6;
-      const hits = raycaster.intersectObject(planet, false);
-      if (hits.length > 0) {
-        return { point: hits[0].point.clone(), normal: hits[0].face.normal.clone().transformDirection(planet.matrixWorld).normalize() };
-      }
-      const h = terrainHeight(d); // fallback, shouldn't normally trigger
-      return { point: d.clone().multiplyScalar(PLANET_R + h), normal: d.clone() };
+      const dn = d.clone().normalize();
+      const point = dn.clone().multiplyScalar(PLANET_R + terrainHeight(dn));
+      const ref = Math.abs(dn.y) < 0.9 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
+      const t1 = new THREE.Vector3().crossVectors(ref, dn).normalize();
+      const t2 = new THREE.Vector3().crossVectors(dn, t1).normalize();
+      const e = 1.0 / PLANET_R;
+      const d1 = dn.clone().addScaledVector(t1, e).normalize();
+      const d2 = dn.clone().addScaledVector(t2, e).normalize();
+      const p1 = d1.multiplyScalar(PLANET_R + terrainHeight(d1));
+      const p2 = d2.multiplyScalar(PLANET_R + terrainHeight(d2));
+      const normal = new THREE.Vector3().crossVectors(p1.sub(point), p2.sub(point)).normalize();
+      if (normal.dot(dn) < 0) normal.negate();
+      return { point, normal };
     }
 
     // ---------- Sea: a translucent sphere at sea level — land pokes above it, low areas sit under it ----------
     const seaMat = new THREE.MeshToonMaterial({ color: "#4f86a0", gradientMap, transparent: true, opacity: 0.82 });
-    const sea = new THREE.Mesh(new THREE.SphereGeometry(PLANET_R + SEA_LEVEL, 48, 32), seaMat);
+    const sea = new THREE.Mesh(new THREE.SphereGeometry(PLANET_R + SEA_LEVEL, 160, 110), seaMat);
     scene.add(sea);
 
     // ---------- Clouds: small fluffy low-poly clusters drifting around the planet ----------
@@ -255,7 +260,7 @@ export default function PlanetDemo() {
     const foliageMat = new THREE.MeshToonMaterial({ color: PALETTE.foliage, gradientMap });
     const rockMat = new THREE.MeshToonMaterial({ color: PALETTE.rock, gradientMap });
     const bushMat = new THREE.MeshToonMaterial({ color: "#5f7a4f", gradientMap });
-    const decor = { tree: [], bush: [], rock: [] }; // { obj (procedural stand-in), pos, quat, scale }
+    const decor = { tree: [], bush: [], rock: [] };
     for (let i = 0; i < 380; i++) {
       const d = randomDir();
       const h = terrainHeight(d);
@@ -304,11 +309,11 @@ export default function PlanetDemo() {
       }
     }
 
-    // ---------- Quality fallback: if the real models make it too slow, go back to the light procedural ones ----------
+    // ---------- Quality fallback: if the real models make it too slow, go back to the light stand-ins ----------
     const quality = {
       downgraded: false,
       frameTimes: [],
-      groups: [], // { proc: Object3D[], real: Object3D[] }
+      groups: [],
       register(proc, real) {
         this.groups.push({ proc, real });
       },
@@ -328,11 +333,11 @@ export default function PlanetDemo() {
       },
     };
 
-    // ---------- Real models (trees, rocks, bushes): swapped in once loaded, procedural stays as fallback ----------
+    // ---------- Real models (trees, rocks, bushes) swapped in once loaded; stand-ins stay as fallback ----------
     function swapInReal(kind, paths) {
       Promise.all(paths.map((pth) => loadModel(pth))).then((models) => {
         const variants = models.filter(Boolean);
-        if (variants.length === 0 || decor[kind].length === 0) return; // keep procedural
+        if (variants.length === 0 || decor[kind].length === 0) return;
         const realMeshes = [];
         variants.forEach((gltf, vIdx) => {
           const placements = decor[kind].filter((_, i) => i % variants.length === vIdx);
@@ -456,88 +461,197 @@ export default function PlanetDemo() {
       return new THREE.Vector3(0.35, 0.85, 0.25).normalize();
     }
     const villageCenter = findVillageSpot();
-    const hutWallMats = [
-      new THREE.MeshToonMaterial({ color: "#c9b08a", gradientMap }),
-      new THREE.MeshToonMaterial({ color: "#b8a48f", gradientMap }),
-      new THREE.MeshToonMaterial({ color: "#a99478", gradientMap }),
+
+    // ---------- Buildings ----------
+    // Three building types. Footprints are those of the real Pirate-kit houses (scaled by HS so the
+    // doors fit the character); the procedural stand-ins use the SAME footprints, so collisions, the
+    // ground foundation and the door position are identical whether the real model or the stand-in
+    // is shown. The door is always on the local +Z face, at x = 0.
+    const HS = 0.94;
+    const BUILDING_TYPES = [
+      { name: "long", x0: -4.6, x1: 4.65, z0: -2.3, z1: 2.3, h: 4.4, roofH: 2.2, roomKey: "large" },
+      { name: "tower", x0: -1.7, x1: 1.7, z0: -2.05, z1: 1.3, h: 6.6, roofH: 2.6, roomKey: "small" },
+      { name: "ship", x0: -2.8, x1: 2.8, z0: -1.57, z1: 1.57, h: 5.2, roofH: 1.8, roomKey: "medium" },
+    ].map((t) => ({ ...t, x0: t.x0 * HS, x1: t.x1 * HS, z0: t.z0 * HS, z1: t.z1 * HS, h: t.h * HS, roofH: t.roofH * HS }));
+    const DOOR_H = 2.0;
+    const wallMats = [
+      new THREE.MeshToonMaterial({ color: "#8a6a4a", gradientMap }),
+      new THREE.MeshToonMaterial({ color: "#7a5c40", gradientMap }),
+      new THREE.MeshToonMaterial({ color: "#9a7a58", gradientMap }),
     ];
-    const hutRoofMats = [
-      new THREE.MeshToonMaterial({ color: "#8a4f3a", gradientMap }),
-      new THREE.MeshToonMaterial({ color: "#6b5a42", gradientMap }),
-      new THREE.MeshToonMaterial({ color: "#7a3f38", gradientMap }),
+    const roofMats = [
+      new THREE.MeshToonMaterial({ color: "#5a3f33", gradientMap }),
+      new THREE.MeshToonMaterial({ color: "#6b3a34", gradientMap }),
     ];
-    const hutDoorMat = new THREE.MeshToonMaterial({ color: "#3a2a1e", gradientMap });
-    const HUT_SIZES = {
-      small: { w: 3.2, h: 2.6, roofH: 1.5, doorH: 1.5 },
-      medium: { w: 4.4, h: 3.3, roofH: 1.9, doorH: 1.7 },
-      large: { w: 6.2, h: 4.2, roofH: 2.5, doorH: 1.9 },
-    };
-    function buildHut(d, facingTangent, sizeKey) {
-      const s = HUT_SIZES[sizeKey] ?? HUT_SIZES.medium;
-      const wallMat = hutWallMats[Math.floor(rand() * hutWallMats.length)];
-      const roofMat = hutRoofMats[Math.floor(rand() * hutRoofMats.length)];
-      const surf = getSurfacePoint(d);
-      const g = new THREE.Group();
-      const body = new THREE.Mesh(new THREE.BoxGeometry(s.w, s.h, s.w), wallMat);
-      body.position.y = s.h / 2;
-      body.castShadow = true;
-      g.add(body);
-      const roof = new THREE.Mesh(new THREE.ConeGeometry(s.w * 0.82, s.roofH, 4), roofMat);
-      roof.position.y = s.h + s.roofH / 2;
-      roof.rotation.y = Math.PI / 4;
-      roof.castShadow = true;
-      g.add(roof);
-      const door = new THREE.Mesh(new THREE.BoxGeometry(s.w * 0.22, s.doorH, 0.06), hutDoorMat);
-      door.position.set(0, s.doorH / 2, s.w / 2 + 0.03);
-      g.add(door);
-      g.position.copy(surf.point);
-      g.up.copy(surf.normal);
-      g.lookAt(surf.point.clone().add(facingTangent));
-      scene.add(g);
-      obstacles.push({ dir: d.clone(), r: (s.w * 0.62) / PLANET_R });
-      return g;
+    const doorMat = new THREE.MeshToonMaterial({ color: "#3a2a1e", gradientMap });
+    const windowMat = new THREE.MeshToonMaterial({ color: "#5a8fc4", gradientMap });
+    const foundationMat = new THREE.MeshToonMaterial({ color: "#77726a", gradientMap });
+    function makeGableRoof(w, d, roofH) {
+      const shape = new THREE.Shape();
+      shape.moveTo(-d / 2 - 0.25, 0);
+      shape.lineTo(d / 2 + 0.25, 0);
+      shape.lineTo(0, roofH);
+      shape.lineTo(-d / 2 - 0.25, 0);
+      const geo = new THREE.ExtrudeGeometry(shape, { depth: w + 0.5, bevelEnabled: false });
+      geo.translate(0, 0, -(w + 0.5) / 2);
+      geo.rotateY(Math.PI / 2); // ridge runs along the building's long (x) axis
+      return geo;
     }
-    const HUT_COUNT = 5;
-    const villageSizeOrder = ["large", "small", "medium", "small", "medium"];
-    for (let i = 0; i < HUT_COUNT; i++) {
-      const angle = (i / HUT_COUNT) * Math.PI * 2;
-      const offsetDist = 7.5 / PLANET_R;
-      const tangentA = new THREE.Vector3(1, 0, 0).addScaledVector(villageCenter, -villageCenter.x).normalize();
-      const tangentB = new THREE.Vector3().crossVectors(villageCenter, tangentA).normalize();
-      const hutDir = villageCenter
-        .clone()
-        .addScaledVector(tangentA, Math.cos(angle) * offsetDist)
-        .addScaledVector(tangentB, Math.sin(angle) * offsetDist)
-        .normalize();
-      const surfHut = getSurfacePoint(hutDir);
-      const towardCenterRaw = villageCenter.clone().sub(hutDir);
-      const towardCenter = towardCenterRaw.addScaledVector(surfHut.normal, -towardCenterRaw.dot(surfHut.normal)).normalize();
-      buildHut(hutDir, towardCenter, villageSizeOrder[i]);
+    const buildings = []; // { g, standIn, foundation, T, typeIdx, doorWorld, exitDir, roomKey, pos, quat }
+
+    // Looks at the ground under the footprint (relative to a plane tangent at the center). Returns
+    // null if the site is too steep or too close to the water; otherwise how high the floor must sit
+    // and how low the foundation must reach so no gap is ever visible, even on a slope.
+    function planBuilding(d, facingTangent, T, maxSlope) {
+      const surf = getSurfacePoint(d);
+      if (terrainHeight(d) < SEA_LEVEL + 0.5) return null;
+      const zAxis = facingTangent.clone().addScaledVector(surf.normal, -facingTangent.dot(surf.normal)).normalize();
+      const xAxis = new THREE.Vector3().crossVectors(surf.normal, zAxis).normalize();
+      const xs = [T.x0 - 0.5, (T.x0 + T.x1) / 2, T.x1 + 0.5];
+      const zs = [T.z0 - 0.5, (T.z0 + T.z1) / 2, T.z1 + 0.5];
+      let dmin = 0;
+      let dmax = 0;
+      for (const x of xs) {
+        for (const z of zs) {
+          const dd = surf.point.clone().addScaledVector(xAxis, x).addScaledVector(zAxis, z).normalize();
+          const h = terrainHeight(dd);
+          if (h < SEA_LEVEL + 0.3) return null;
+          const q = dd.multiplyScalar(PLANET_R + h);
+          const delta = q.sub(surf.point).dot(surf.normal);
+          dmin = Math.min(dmin, delta);
+          dmax = Math.max(dmax, delta);
+        }
+      }
+      if (dmax - dmin > maxSlope) return null;
+      return { surf, zAxis, lift: Math.max(0, dmax), dmin };
     }
 
-    const SCATTERED_BUILDING_COUNT = 45;
-    const sizeKeys = ["small", "small", "small", "medium", "medium", "large"];
+    function placeBuilding(d, facingTangent, typeIdx, maxSlope) {
+      const T = BUILDING_TYPES[typeIdx];
+      const plan = planBuilding(d, facingTangent, T, maxSlope);
+      if (!plan) return null;
+      const w = T.x1 - T.x0;
+      const dp = T.z1 - T.z0;
+      const cx = (T.x0 + T.x1) / 2;
+      const cz = (T.z0 + T.z1) / 2;
+      const g = new THREE.Group();
+
+      // stand-in (shown when the real model isn't available)
+      const standIn = new THREE.Group();
+      const wallMat = wallMats[Math.floor(rand() * wallMats.length)];
+      const roofMat = roofMats[Math.floor(rand() * roofMats.length)];
+      const body = new THREE.Mesh(new THREE.BoxGeometry(w, T.h, dp), wallMat);
+      body.position.set(cx, T.h / 2, cz);
+      body.castShadow = true;
+      standIn.add(body);
+      const roof = new THREE.Mesh(makeGableRoof(w, dp, T.roofH), roofMat);
+      roof.position.set(cx, T.h, cz);
+      roof.castShadow = true;
+      standIn.add(roof);
+      const door = new THREE.Mesh(new THREE.BoxGeometry(1.0, DOOR_H, 0.1), doorMat);
+      door.position.set(0, DOOR_H / 2, T.z1 + 0.04);
+      standIn.add(door);
+      const winCount = w > 6 ? 4 : 2;
+      for (let i = 0; i < winCount; i++) {
+        const wx = winCount === 2 ? (i === 0 ? -1 : 1) * Math.min(w * 0.3, 1.1) : [-0.38, -0.2, 0.2, 0.38][i] * w * (i % 3 === 0 ? 1 : 1.9) * 0.5;
+        const win = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.8, 0.08), windowMat);
+        win.position.set(wx, T.h * 0.62, T.z1 + 0.04);
+        standIn.add(win);
+      }
+      g.add(standIn);
+
+      // foundation: reaches down to the lowest ground point under the footprint
+      const fh = plan.lift - plan.dmin + 0.7;
+      const foundation = new THREE.Mesh(new THREE.BoxGeometry(w + 0.5, fh, dp + 0.5), foundationMat);
+      foundation.position.set(cx, -fh / 2 + 0.04, cz);
+      foundation.receiveShadow = true;
+      g.add(foundation);
+
+      g.position.copy(plan.surf.point).addScaledVector(plan.surf.normal, plan.lift);
+      g.up.copy(plan.surf.normal);
+      g.lookAt(g.position.clone().add(plan.zAxis));
+      scene.add(g);
+      g.updateMatrixWorld(true);
+
+      // collision: several circles along the long axis
+      const r = dp / 2 + 0.25;
+      const n = Math.max(1, Math.round(w / dp));
+      for (let i = 0; i < n; i++) {
+        const x = n === 1 ? cx : T.x0 + r + ((w - 2 * r) * i) / (n - 1);
+        const wp = g.localToWorld(new THREE.Vector3(x, 0, cz));
+        obstacles.push({ dir: wp.normalize(), r: r / PLANET_R });
+      }
+      const doorWorld = g.localToWorld(new THREE.Vector3(0, 1.0, T.z1 + 0.3));
+      const exitDir = g.localToWorld(new THREE.Vector3(0, 0, T.z1 + 1.9)).normalize();
+      const rec = { g, standIn, foundation, T, typeIdx, doorWorld, exitDir, roomKey: T.roomKey, pos: g.position.clone(), quat: g.quaternion.clone() };
+      buildings.push(rec);
+      return rec;
+    }
+
+    // village: a ring of buildings around the center, all facing it
+    const villageTypeOrder = [0, 2, 1, 2, 1];
+    const tangentA = new THREE.Vector3(1, 0, 0).addScaledVector(villageCenter, -villageCenter.x).normalize();
+    const tangentB = new THREE.Vector3().crossVectors(villageCenter, tangentA).normalize();
+    for (let i = 0; i < villageTypeOrder.length; i++) {
+      const angle = (i / villageTypeOrder.length) * Math.PI * 2 + 0.3;
+      const offsetDist = 17 / PLANET_R;
+      const hutDir = villageCenter.clone().addScaledVector(tangentA, Math.cos(angle) * offsetDist).addScaledVector(tangentB, Math.sin(angle) * offsetDist).normalize();
+      const towardRaw = villageCenter.clone().sub(hutDir);
+      const T = BUILDING_TYPES[villageTypeOrder[i]];
+      const bR = Math.hypot((T.x1 - T.x0) / 2, (T.z1 - T.z0) / 2) + 1;
+      let clear = true;
+      for (let k = 0; k < obstacles.length; k++) {
+        if (hutDir.angleTo(obstacles[k].dir) < obstacles[k].r + bR / PLANET_R) {
+          clear = false;
+          break;
+        }
+      }
+      if (clear) placeBuilding(hutDir, towardRaw, villageTypeOrder[i], 1.6);
+    }
+
+    // the rest of the town, spread over the dry land
+    const SCATTERED_BUILDING_COUNT = 28;
     let scatteredBuilt = 0;
     let scatterAttempts = 0;
-    while (scatteredBuilt < SCATTERED_BUILDING_COUNT && scatterAttempts < 4000) {
+    while (scatteredBuilt < SCATTERED_BUILDING_COUNT && scatterAttempts < 5000) {
       scatterAttempts++;
       const d = randomDir();
       const h = terrainHeight(d);
-      if (h < SEA_LEVEL + 0.4 || h > 1.5) continue;
+      if (h < SEA_LEVEL + 0.6 || h > 1.5) continue;
+      const typeIdx = Math.floor(rand() * BUILDING_TYPES.length);
+      const T = BUILDING_TYPES[typeIdx];
+      const bR = Math.hypot((T.x1 - T.x0) / 2, (T.z1 - T.z0) / 2) + 3;
       let tooClose = false;
       for (let i = 0; i < obstacles.length; i++) {
-        if (d.angleTo(obstacles[i].dir) < obstacles[i].r + 5 / PLANET_R) {
+        if (d.angleTo(obstacles[i].dir) < obstacles[i].r + bR / PLANET_R) {
           tooClose = true;
           break;
         }
       }
       if (tooClose) continue;
-      const facingTangent = randomDir();
-      const surfB = getSurfacePoint(d);
-      const projTangent = facingTangent.addScaledVector(surfB.normal, -facingTangent.dot(surfB.normal)).normalize();
-      buildHut(d, projTangent, sizeKeys[Math.floor(rand() * sizeKeys.length)]);
-      scatteredBuilt++;
+      if (placeBuilding(d, randomDir(), typeIdx, 0.9)) scatteredBuilt++;
     }
+
+    // ---------- Real houses (Pirate kit), swapped in once loaded; the stand-ins stay as fallback ----------
+    // The foundation under each house stays visible in both cases.
+    const HOUSE_PATHS = ["/models/buildings/Environment_House1.gltf", "/models/buildings/Environment_House2.gltf", "/models/buildings/Environment_House3.gltf"];
+    Promise.all(HOUSE_PATHS.map((pth) => loadModel(pth))).then((models) => {
+      const realMeshes = [];
+      const standIns = [];
+      models.forEach((gltf, typeIdx) => {
+        if (!gltf) return;
+        const list = buildings.filter((b) => b.typeIdx === typeIdx);
+        if (list.length === 0) return;
+        buildInstanced(extractInstanceSources(gltf), list.map((b) => ({ pos: b.pos, quat: b.quat, scale: HS }))).forEach((im) => {
+          scene.add(im);
+          realMeshes.push(im);
+        });
+        list.forEach((b) => standIns.push(b.standIn));
+      });
+      if (realMeshes.length === 0) return;
+      standIns.forEach((o) => (o.visible = false));
+      quality.register(standIns, realMeshes);
+    });
 
     // road: a chain of flat tiles following the great-circle arc from spawn to the village
     function buildRoad(dirA, dirB, steps) {
@@ -699,25 +813,31 @@ export default function PlanetDemo() {
     character.scale.setScalar(1.15);
     scene.add(character);
 
-    // Real character (Anne). Native height ~1.81m, feet 0.18 below her origin; the group is
-    // scaled 1.15, so this scale brings her to ~1.7m in the world. Procedural rig stays as fallback.
+    // Real character (Anne): ~1.81 m native with feet 0.18 below her origin; the group is scaled 1.15,
+    // so this brings her to ~1.7 m in the world. The procedural rig stays as fallback.
     let mixer = null;
     let idleAction = null;
     let walkAction = null;
     let jumpAction = null;
-    let currentAction = null;
-    function setAction(action, fade = 0.2) {
-      if (!action || currentAction === action) return;
+    let currentAnim = null;
+    function setAnimAction(action, fade = 0.2) {
+      if (!action || currentAnim === action) return;
       action.reset().fadeIn(fade).play();
-      if (currentAction) currentAction.fadeOut(fade);
-      currentAction = action;
+      if (currentAnim) currentAnim.fadeOut(fade);
+      currentAnim = action;
+    }
+    function syncRealAnim(moving) {
+      if (!(idleAction || walkAction || jumpAction)) return;
+      if (!grounded) setAnimAction(jumpAction ?? walkAction ?? idleAction);
+      else if (moving) setAnimAction(walkAction ?? idleAction);
+      else setAnimAction(idleAction);
     }
     loadModel("/models/characters/Characters_Anne.gltf").then((gltf) => {
-      if (!gltf) return; // keep the procedural character
+      if (!gltf) return;
       const model = gltf.scene;
-      const s = 1.7 / (1.81 * 1.15);
-      model.scale.setScalar(s);
-      model.position.y = 0.18 * s;
+      const sc = 1.7 / (1.81 * 1.15);
+      model.scale.setScalar(sc);
+      model.position.y = 0.18 * sc;
       model.traverse((o) => {
         if (o.isMesh) o.castShadow = true;
       });
@@ -734,7 +854,7 @@ export default function PlanetDemo() {
         idleAction = idle ? mixer.clipAction(idle) : null;
         walkAction = walk ? mixer.clipAction(walk) : null;
         jumpAction = jump ? mixer.clipAction(jump) : null;
-        setAction(idleAction, 0);
+        setAnimAction(idleAction, 0);
       }
     });
 
@@ -766,6 +886,94 @@ export default function PlanetDemo() {
       }
       return new THREE.Vector3(0, 1, 0);
     }
+    // ---------- Interiors ----------
+    // Rooms are built at the planet's center (inside the solid ground, so invisible from outside),
+    // wrapped in a dark dome so nothing else shows through. Cutaway view: no ceiling and no front
+    // wall, with a fixed camera, so the camera never ends up inside a wall.
+    const ROOM_SPECS = { small: { W: 5.0, D: 4.4, H: 3.0 }, medium: { W: 6.8, D: 5.8, H: 3.2 }, large: { W: 9.4, D: 8.0, H: 3.6 } };
+    const stage = new THREE.Mesh(new THREE.SphereGeometry(45, 20, 14), new THREE.MeshBasicMaterial({ color: "#29262f", side: THREE.BackSide, fog: false }));
+    stage.visible = false;
+    scene.add(stage);
+    const roomLight = new THREE.PointLight(0xffd9a8, 0, 28, 1.4);
+    scene.add(roomLight);
+    const rWall = new THREE.MeshToonMaterial({ color: "#b79c78", gradientMap });
+    const rFloor = new THREE.MeshToonMaterial({ color: "#7a5a3a", gradientMap });
+    const rWood = new THREE.MeshToonMaterial({ color: "#6b4a30", gradientMap });
+    const rDark = new THREE.MeshToonMaterial({ color: "#3a2a1e", gradientMap });
+    const rRug = new THREE.MeshToonMaterial({ color: "#8a3f38", gradientMap });
+    const rCloth = new THREE.MeshToonMaterial({ color: "#c9c2a8", gradientMap });
+    const rBlue = new THREE.MeshToonMaterial({ color: "#5a8fc4", gradientMap });
+    const rGold = new THREE.MeshToonMaterial({ color: "#d4af37", gradientMap });
+    const rooms = {};
+    Object.entries(ROOM_SPECS).forEach(([key, { W, D, H }]) => {
+      const g = new THREE.Group();
+      g.visible = false;
+      const add = (geo, mat, x, y, z) => {
+        const m = new THREE.Mesh(geo, mat);
+        m.position.set(x, y, z);
+        g.add(m);
+        return m;
+      };
+      const colliders = [];
+      add(new THREE.BoxGeometry(W + 0.4, 0.3, D + 0.4), rFloor, 0, -0.15, 0);
+      add(new THREE.BoxGeometry(W + 0.4, H, 0.2), rWall, 0, H / 2, -D / 2 - 0.1);
+      add(new THREE.BoxGeometry(0.2, H, D + 0.4), rWall, -W / 2 - 0.1, H / 2, 0);
+      add(new THREE.BoxGeometry(0.2, H, D + 0.4), rWall, W / 2 + 0.1, H / 2, 0);
+      // exit door on the back wall
+      add(new THREE.BoxGeometry(1.3, DOOR_H + 0.12, 0.12), rDark, 0, (DOOR_H + 0.12) / 2, -D / 2 + 0.02);
+      add(new THREE.BoxGeometry(1.0, DOOR_H, 0.14), rWood, 0, DOOR_H / 2, -D / 2 + 0.05);
+      add(new THREE.BoxGeometry(1.2, 0.03, 0.7), rRug, 0, 0.02, -D / 2 + 0.55);
+      // windows on the side walls
+      [-1, 1].forEach((sd) => add(new THREE.BoxGeometry(0.06, 0.9, 1.1), rBlue, sd * (W / 2 - 0.02), H * 0.6, -D * 0.12));
+      // rug
+      add(new THREE.BoxGeometry(2.4, 0.03, 1.7), rRug, 0, 0.02, D * 0.12);
+      // table + stools + lamp
+      const tx = W * 0.16;
+      const tz = D * 0.1;
+      add(new THREE.BoxGeometry(1.3, 0.08, 0.8), rWood, tx, 0.78, tz);
+      [[-0.55, -0.32], [0.55, -0.32], [-0.55, 0.32], [0.55, 0.32]].forEach(([lx, lz]) => add(new THREE.BoxGeometry(0.08, 0.75, 0.08), rWood, tx + lx, 0.38, tz + lz));
+      add(new THREE.SphereGeometry(0.11, 10, 8), rGold, tx, 0.97, tz);
+      colliders.push({ x: tx, z: tz, r: 0.85 });
+      [-0.95, 0.95].forEach((o) => {
+        add(new THREE.BoxGeometry(0.4, 0.45, 0.4), rWood, tx + o, 0.22, tz + 0.05);
+        colliders.push({ x: tx + o, z: tz + 0.05, r: 0.34 });
+      });
+      // bed, back-left corner
+      const bx = -W / 2 + 0.75;
+      const bz = -D / 2 + 1.35;
+      add(new THREE.BoxGeometry(1.1, 0.45, 2.1), rWood, bx, 0.22, bz);
+      add(new THREE.BoxGeometry(1.0, 0.18, 1.7), rCloth, bx, 0.52, bz + 0.15);
+      add(new THREE.BoxGeometry(0.8, 0.16, 0.38), rCloth, bx, 0.66, bz - 0.8);
+      colliders.push({ x: bx, z: bz - 0.5, r: 0.8 }, { x: bx, z: bz + 0.5, r: 0.8 });
+      // shelf on the right wall, with a few books
+      const sx = W / 2 - 0.3;
+      const sz = -D * 0.05;
+      add(new THREE.BoxGeometry(0.4, 2.0, 1.6), rWood, sx, 1.0, sz);
+      [rRug, rBlue, rGold, rCloth, rBlue].forEach((m, i) => add(new THREE.BoxGeometry(0.28, 0.3, 0.18), m, sx - 0.05, 0.55 + Math.floor(i / 3) * 0.7, sz - 0.5 + (i % 3) * 0.5));
+      colliders.push({ x: sx, z: sz - 0.5, r: 0.7 }, { x: sx, z: sz + 0.5, r: 0.7 });
+      // chest
+      const cx = W / 2 - 0.65;
+      const cz = D * 0.3;
+      add(new THREE.BoxGeometry(0.9, 0.5, 0.55), rWood, cx, 0.25, cz);
+      add(new THREE.BoxGeometry(0.94, 0.08, 0.59), rGold, cx, 0.52, cz);
+      colliders.push({ x: cx, z: cz, r: 0.6 });
+      scene.add(g);
+      rooms[key] = { key, group: g, W, D, H, colliders };
+    });
+    function roomFree(room, x, z) {
+      if (Math.abs(x) > room.W / 2 - 0.45 || z < -room.D / 2 + 0.35 || z > room.D / 2 - 0.45) return false;
+      for (let i = 0; i < room.colliders.length; i++) {
+        const c = room.colliders[i];
+        if (Math.hypot(x - c.x, z - c.z) < c.r + 0.3) return false;
+      }
+      return true;
+    }
+    let inside = null; // { room, returnDir, returnFacing } while the character is indoors
+    const inPos = new THREE.Vector3();
+    const inHeading = new THREE.Vector3(0, 0, 1);
+    let snapCam = false;
+    let snapOutCam = false;
+
     let charDir = findLandSpawn();
     let facing = new THREE.Vector3(0, 0, -1);
     let charFacing = new THREE.Vector3(0, 0, -1);
@@ -941,6 +1149,64 @@ export default function PlanetDemo() {
     });
     mount.appendChild(jumpBtn);
 
+    // action button: ENTRA next to a door, ESCI next to the interior door
+    const actionBtn = document.createElement("div");
+    actionBtn.textContent = "ENTRA";
+    Object.assign(actionBtn.style, {
+      position: "fixed",
+      right: "24px",
+      bottom: "124px",
+      width: "76px",
+      height: "76px",
+      borderRadius: "50%",
+      background: "rgba(35,40,38,0.38)",
+      border: "2px solid rgba(255,211,92,0.85)",
+      color: "#fff",
+      fontFamily: "system-ui, sans-serif",
+      fontSize: "12px",
+      fontWeight: "700",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      userSelect: "none",
+      touchAction: "none",
+      zIndex: 22,
+      opacity: "0",
+      pointerEvents: "none",
+      transition: "opacity 0.15s",
+    });
+    let actionRequested = false;
+    actionBtn.addEventListener("pointerdown", (e) => {
+      e.stopPropagation();
+      actionRequested = true;
+      actionBtn.style.background = "rgba(255,211,92,0.55)";
+    });
+    actionBtn.addEventListener("pointerup", (e) => {
+      e.stopPropagation();
+      actionBtn.style.background = "rgba(35,40,38,0.38)";
+    });
+    mount.appendChild(actionBtn);
+    function setAction(label) {
+      if (label) {
+        actionBtn.textContent = label;
+        actionBtn.style.opacity = "1";
+        actionBtn.style.pointerEvents = "auto";
+      } else {
+        actionBtn.style.opacity = "0";
+        actionBtn.style.pointerEvents = "none";
+      }
+    }
+    const fadeEl = document.createElement("div");
+    Object.assign(fadeEl.style, { position: "fixed", inset: "0", background: "#000", opacity: "0", pointerEvents: "none", zIndex: 40 });
+    mount.appendChild(fadeEl);
+    function flash() {
+      fadeEl.style.transition = "none";
+      fadeEl.style.opacity = "1";
+      void fadeEl.offsetWidth;
+      fadeEl.style.transition = "opacity 0.4s";
+      fadeEl.style.opacity = "0";
+    }
+
     // ---------- Animation loop ----------
     const clock = new THREE.Clock();
     const dayColorTmp = new THREE.Color();
@@ -948,6 +1214,63 @@ export default function PlanetDemo() {
     let walkPhase = 0;
     let walkAmp = 0;
     let raf;
+    function animateLimbs(moving, dt) {
+      walkAmp += ((moving && grounded ? 1 : 0) - walkAmp) * Math.min(1, dt * 6);
+      if (moving) walkPhase += dt * 6.5;
+      const swing = Math.sin(walkPhase) * 0.4 * walkAmp;
+      const counterSwing = Math.sin(walkPhase + Math.PI) * 0.4 * walkAmp;
+      hipLeft.rotation.x = swing;
+      hipRight.rotation.x = counterSwing;
+      shoulderLeft.rotation.x = counterSwing * 0.85;
+      shoulderRight.rotation.x = swing * 0.85;
+      if (!grounded) {
+        const vNorm = Math.max(-1, Math.min(1, jumpVel / JUMP_SPEED));
+        const apex = 1 - Math.abs(vNorm);
+        const tuck = 0.1 + 0.28 * apex;
+        hipLeft.rotation.x = tuck;
+        hipRight.rotation.x = tuck;
+        shoulderLeft.rotation.x = -0.5 - 0.4 * apex;
+        shoulderRight.rotation.x = -0.5 - 0.4 * apex;
+      }
+    }
+
+    function enterBuilding(b) {
+      const room = rooms[b.roomKey];
+      const centerDir = b.pos.clone().normalize();
+      const out = b.exitDir.clone().sub(centerDir);
+      out.addScaledVector(b.exitDir, -out.dot(b.exitDir)).normalize();
+      inside = { room, returnDir: b.exitDir.clone(), returnFacing: out };
+      inPos.set(0, 0, -room.D / 2 + 1.4);
+      inHeading.set(0, 0, 1);
+      jumpHeight = 0;
+      jumpVel = 0;
+      grounded = true;
+      Object.values(rooms).forEach((r) => (r.group.visible = r === room));
+      stage.visible = true;
+      roomLight.position.set(0, room.H - 0.6, 0);
+      roomLight.intensity = 1.1;
+      camera.up.set(0, 1, 0);
+      snapCam = true;
+      setAction(null);
+      flash();
+    }
+    function exitBuilding() {
+      charDir = inside.returnDir.clone();
+      facing.copy(inside.returnFacing);
+      charFacing.copy(inside.returnFacing);
+      Object.values(rooms).forEach((r) => (r.group.visible = false));
+      stage.visible = false;
+      roomLight.intensity = 0;
+      inside = null;
+      jumpHeight = 0;
+      jumpVel = 0;
+      grounded = true;
+      camera.up.copy(charDir);
+      snapOutCam = true;
+      setAction(null);
+      flash();
+    }
+
     function animate() {
       raf = requestAnimationFrame(animate);
       const dt = Math.min(0.05, clock.getDelta());
@@ -959,7 +1282,7 @@ export default function PlanetDemo() {
       const dayPhase = (t % DAY_CYCLE_SECONDS) / DAY_CYCLE_SECONDS;
       const sunAngle = dayPhase * Math.PI * 2;
       const sunHeight = Math.sin(sunAngle);
-      sun.position.set(Math.cos(sunAngle) * PLANET_R * 3, Math.max(sunHeight, -0.15) * PLANET_R * 2.2 + PLANET_R * 0.4, Math.sin(sunAngle) * PLANET_R * 1.3);
+      sunDirVec.set(Math.cos(sunAngle) * 3, Math.max(sunHeight, -0.15) * 2.2 + 0.4, Math.sin(sunAngle) * 1.3).normalize();
       const dayFactor = smoothstep(-0.22, 0.3, sunHeight);
       const duskFactor = Math.max(0, 1 - Math.abs(sunHeight) * 2.6);
       sun.intensity = 0.4 + dayFactor * 0.8;
@@ -1015,6 +1338,82 @@ export default function PlanetDemo() {
       });
 
 
+
+      if (inside) {
+        const room = inside.room;
+        let mx = moveJoy.dx;
+        let my = moveJoy.dy;
+        if (keys.w) my -= 1;
+        if (keys.s) my += 1;
+        if (keys.a) mx -= 1;
+        if (keys.d) mx += 1;
+        const mlen = Math.hypot(mx, my);
+        let moving = false;
+        if (mlen > 0.08) {
+          const mag = Math.min(1, mlen);
+          const nx = mx / Math.max(mlen, 1);
+          const nz = my / Math.max(mlen, 1); // the room camera looks toward -Z, so stick up = -Z
+          const step = 4.2 * dt * mag;
+          const px = inPos.x + nx * step;
+          const pz = inPos.z + nz * step;
+          if (roomFree(room, px, pz)) {
+            inPos.set(px, 0, pz);
+            moving = true;
+          } else if (roomFree(room, px, inPos.z)) {
+            inPos.x = px;
+            moving = true;
+          } else if (roomFree(room, inPos.x, pz)) {
+            inPos.z = pz;
+            moving = true;
+          }
+          const want = new THREE.Vector3(nx, 0, nz).normalize();
+          inHeading.lerp(want, Math.min(1, dt * 8 * mag)).normalize();
+        }
+        if (jumpRequested && grounded) {
+          jumpVel = JUMP_SPEED;
+          grounded = false;
+        }
+        jumpRequested = false;
+        jumpVel -= GRAVITY * dt;
+        jumpHeight += jumpVel * dt;
+        if (jumpHeight <= 0) {
+          jumpHeight = 0;
+          jumpVel = 0;
+          grounded = true;
+        }
+        const ipos = new THREE.Vector3(inPos.x, jumpHeight, inPos.z);
+        character.position.copy(ipos);
+        character.up.set(0, 1, 0);
+        character.lookAt(ipos.clone().add(inHeading));
+        blob.position.set(inPos.x, 0.03, inPos.z);
+        blob.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), new THREE.Vector3(0, 1, 0));
+        blob.scale.setScalar(Math.max(0.4, 1 - jumpHeight * 0.25));
+        animateLimbs(moving, dt);
+
+        // fixed cutaway camera, distance adapted to the screen shape so the whole room always fits
+        const tanV = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
+        const tanH = tanV * camera.aspect;
+        const dist = Math.min(34, Math.max(6, Math.max((room.W / 2 + 0.8) / tanH, (room.D / 2 + room.H * 0.5 + 1.0) / tanV)));
+        const ang = THREE.MathUtils.degToRad(48);
+        const target = new THREE.Vector3(0, 0.7, -room.D * 0.05);
+        const camPos = target.clone().add(new THREE.Vector3(0, Math.sin(ang) * dist, Math.cos(ang) * dist));
+        if (snapCam) {
+          camera.position.copy(camPos);
+          snapCam = false;
+        } else {
+          camera.position.lerp(camPos, Math.min(1, dt * 10));
+        }
+        camera.up.set(0, 1, 0);
+        camera.lookAt(target);
+
+        const nearExit = Math.abs(inPos.x) < 1.4 && inPos.z < -room.D / 2 + 1.9;
+        setAction(nearExit ? "ESCI" : null);
+        if (actionRequested && nearExit) exitBuilding();
+        actionRequested = false;
+        syncRealAnim(moving);
+      renderer.render(scene, camera);
+        return;
+      }
 
       facing.addScaledVector(charDir, -facing.dot(charDir)).normalize();
       let lookX = lookJoy.dx;
@@ -1078,41 +1477,43 @@ export default function PlanetDemo() {
       character.position.copy(charPos);
       character.up.copy(charDir);
       character.lookAt(charPos.clone().add(charFacing));
+      sun.target.position.copy(charPos);
+      sun.position.copy(charPos).addScaledVector(sunDirVec, 70);
+      sun.target.updateMatrixWorld();
       blob.position.copy(charDir.clone().multiplyScalar(groundR + 0.02));
       blob.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), charDir);
       blob.scale.setScalar(Math.max(0.4, 1 - jumpHeight * 0.25));
 
-      walkAmp += ((moving && grounded ? 1 : 0) - walkAmp) * Math.min(1, dt * 6);
-      if (moving) walkPhase += dt * 6.5;
-      const swing = Math.sin(walkPhase) * 0.4 * walkAmp;
-      const counterSwing = Math.sin(walkPhase + Math.PI) * 0.4 * walkAmp;
-      hipLeft.rotation.x = swing;
-      hipRight.rotation.x = counterSwing;
-      shoulderLeft.rotation.x = counterSwing * 0.85;
-      shoulderRight.rotation.x = swing * 0.85;
-      if (!grounded) {
-        const vNorm = Math.max(-1, Math.min(1, jumpVel / JUMP_SPEED));
-        const apex = 1 - Math.abs(vNorm);
-        const tuck = 0.1 + 0.28 * apex;
-        hipLeft.rotation.x = tuck;
-        hipRight.rotation.x = tuck;
-        shoulderLeft.rotation.x = -0.5 - 0.4 * apex;
-        shoulderRight.rotation.x = -0.5 - 0.4 * apex;
+      animateLimbs(moving, dt);
+
+      let nearBuilding = null;
+      let nearDist = 3.4;
+      for (let i = 0; i < buildings.length; i++) {
+        const dd = charPos.distanceTo(buildings[i].doorWorld);
+        if (dd < nearDist) {
+          nearDist = dd;
+          nearBuilding = buildings[i];
+        }
       }
+      setAction(nearBuilding ? "ENTRA" : null);
+      if (actionRequested && nearBuilding) enterBuilding(nearBuilding);
+      actionRequested = false;
 
       const camDist = 6.5;
       const behind = facing.clone().multiplyScalar(-Math.cos(camPitch) * camDist);
       const above = charDir.clone().multiplyScalar(Math.sin(camPitch) * camDist + 1.4);
       const desiredCamPos = charPos.clone().add(behind).add(above);
-      camera.position.lerp(desiredCamPos, Math.min(1, dt * 8));
-      camera.up.lerp(charDir, Math.min(1, dt * 8)).normalize();
+      if (snapOutCam) {
+        camera.position.copy(desiredCamPos);
+        camera.up.copy(charDir);
+        snapOutCam = false;
+      } else {
+        camera.position.lerp(desiredCamPos, Math.min(1, dt * 8));
+        camera.up.lerp(charDir, Math.min(1, dt * 8)).normalize();
+      }
       camera.lookAt(charPos.clone().addScaledVector(charDir, 1.0));
 
-      if (idleAction || walkAction || jumpAction) {
-        if (!grounded) setAction(jumpAction ?? walkAction ?? idleAction);
-        else if (moving) setAction(walkAction ?? idleAction);
-        else setAction(idleAction);
-      }
+      syncRealAnim(moving);
       renderer.render(scene, camera);
     }
     animate();
@@ -1140,6 +1541,8 @@ export default function PlanetDemo() {
       mount.removeChild(lookVisual.base);
       mount.removeChild(lookVisual.nub);
       mount.removeChild(jumpBtn);
+      mount.removeChild(actionBtn);
+      mount.removeChild(fadeEl);
       renderer.dispose();
       if (mount.contains(dom)) mount.removeChild(dom);
     };
@@ -1165,7 +1568,7 @@ export default function PlanetDemo() {
             pointerEvents: "none",
           }}
         >
-          Trascina a sinistra per muoverti — la telecamera segue da sola
+          Sinistra: muoviti · Destra: guarda attorno
         </div>
       )}
     </div>
