@@ -1249,7 +1249,22 @@ export default function PlanetDemo() {
     const moveVisual = makeJoyVisual("rgba(217,164,65,0.9)");
     const lookVisual = makeJoyVisual("rgba(110,170,205,0.9)");
 
+    mount.style.userSelect = "none";
+    mount.style.webkitUserSelect = "none";
+    mount.style.webkitTouchCallout = "none";
+    mount.style.touchAction = "none";
+    const noCtx = (e) => e.preventDefault();
+    mount.addEventListener("contextmenu", noCtx);
     const pointers = new Map();
+    function resetInput() {
+      pointers.clear();
+      moveJoy.dx = moveJoy.dy = lookJoy.dx = lookJoy.dy = 0;
+      moveVisual.set(0, 0, 0, 0, false);
+      lookVisual.set(0, 0, 0, 0, false);
+    }
+    const onVis = () => { if (document.hidden) resetInput(); };
+    window.addEventListener("blur", resetInput);
+    document.addEventListener("visibilitychange", onVis);
     function onPointerDown(e) {
       const role = e.clientX < window.innerWidth / 2 ? "move" : "look";
       pointers.set(e.pointerId, { role, startX: e.clientX, startY: e.clientY });
@@ -1484,7 +1499,8 @@ export default function PlanetDemo() {
     enterBtn.addEventListener("pointerdown", (e) => { e.stopPropagation(); closeSplash(); });
 
     // ---------- Minimappa (proiezione azimutale centrata su di te, "avanti" = su) ----------
-    let MAP_PX = 112, MAP_RES = 36, MAP_ANG = 1.5, mapBig = false;
+    let MAP_PX = 112, MAP_RES = 36, MAP_ANG = 1.5, mapBig = false, mapZoom = 1;
+    const MAP_FULL = Math.PI * 0.995;
     const mapCanvas = document.createElement("canvas");
     mapCanvas.width = MAP_PX; mapCanvas.height = MAP_PX;
     Object.assign(mapCanvas.style, { position: "absolute", top: "12px", left: "12px", width: MAP_PX + "px", height: MAP_PX + "px", borderRadius: "50%", border: "3px solid rgba(255,255,255,.75)", background: "#123", zIndex: 22, boxShadow: "0 2px 10px rgba(0,0,0,.3)" });
@@ -1500,8 +1516,10 @@ export default function PlanetDemo() {
     mount.appendChild(mapBackdrop);
     function applyMapSize() {
       MAP_PX = mapBig ? Math.max(220, Math.min(380, window.innerWidth - 32, window.innerHeight - 100)) : 112;
-      MAP_RES = mapBig ? 96 : 36;
-      MAP_ANG = mapBig ? Math.PI * 0.995 : 1.5;
+      MAP_RES = mapBig ? 110 : 36;
+      MAP_ANG = mapBig ? MAP_FULL / mapZoom : 1.5;
+      mapCtl.style.display = mapBig ? "flex" : "none";
+      mapCtl.style.top = mapBig ? `calc(50% + ${MAP_PX / 2 + 12}px)` : "0";
       mapCanvas.width = MAP_PX; mapCanvas.height = MAP_PX;
       mapTmp.width = MAP_RES; mapTmp.height = MAP_RES;
       mapImg = mtx.createImageData(MAP_RES, MAP_RES);
@@ -1513,9 +1531,41 @@ export default function PlanetDemo() {
     }
     mapCanvas.style.pointerEvents = "auto";
     mapCanvas.style.cursor = "pointer";
-    const toggleMap = (e) => { e.stopPropagation(); mapBig = !mapBig; applyMapSize(); };
-    mapCanvas.addEventListener("pointerdown", toggleMap);
-    mapBackdrop.addEventListener("pointerdown", toggleMap);
+    mapCanvas.style.touchAction = "none";
+    const mapCtl = document.createElement("div");
+    Object.assign(mapCtl.style, { position: "absolute", left: "50%", transform: "translateX(-50%)", display: "none", gap: "12px", zIndex: 46 });
+    const mapBtn = (label, fn) => {
+      const b = document.createElement("div");
+      b.textContent = label;
+      Object.assign(b.style, { width: "46px", height: "46px", borderRadius: "50%", background: "rgba(255,255,255,0.92)", color: "#223", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "24px", fontWeight: "700", cursor: "pointer", userSelect: "none", touchAction: "none", font: "700 22px system-ui, sans-serif" });
+      b.addEventListener("pointerdown", (e) => { e.stopPropagation(); fn(); });
+      mapCtl.appendChild(b);
+    };
+    const setZoom = (z) => { mapZoom = Math.max(1, Math.min(4, z)); MAP_ANG = MAP_FULL / mapZoom; mapTimer = 0; };
+    const closeMap = () => { mapBig = false; mapZoom = 1; applyMapSize(); };
+    mapBtn("\u2212", () => setZoom(mapZoom / 1.5));
+    mapBtn("+", () => setZoom(mapZoom * 1.5));
+    mapBtn("\u2715", closeMap);
+    mount.appendChild(mapCtl);
+    // piccola: un tocco la apre. Grande: un tocco NON la chiude; zoom con +/- , rotella o pinch (due dita).
+    const mapPtrs = new Map();
+    let pinchD0 = 0, pinchZ0 = 1;
+    mapCanvas.addEventListener("pointerdown", (e) => {
+      e.stopPropagation();
+      if (!mapBig) { mapBig = true; mapZoom = 1; applyMapSize(); return; }
+      mapPtrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (mapPtrs.size === 2) { const [a, b] = [...mapPtrs.values()]; pinchD0 = Math.hypot(a.x - b.x, a.y - b.y); pinchZ0 = mapZoom; }
+    });
+    mapCanvas.addEventListener("pointermove", (e) => {
+      if (!mapPtrs.has(e.pointerId)) return;
+      mapPtrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (mapPtrs.size === 2 && pinchD0 > 0) { const [a, b] = [...mapPtrs.values()]; setZoom(pinchZ0 * (Math.hypot(a.x - b.x, a.y - b.y) / pinchD0)); }
+    });
+    const mapUp = (e) => mapPtrs.delete(e.pointerId);
+    mapCanvas.addEventListener("pointerup", mapUp);
+    mapCanvas.addEventListener("pointercancel", mapUp);
+    mapCanvas.addEventListener("wheel", (e) => { if (!mapBig) return; e.preventDefault(); setZoom(mapZoom * (e.deltaY < 0 ? 1.2 : 1 / 1.2)); }, { passive: false });
+    mapBackdrop.addEventListener("pointerdown", (e) => { e.stopPropagation(); closeMap(); });
     const mpR = new THREE.Vector3(), mpD = new THREE.Vector3(), mpT = new THREE.Vector3();
     function updateMinimap(dt) {
       mapTimer -= dt;
@@ -1793,6 +1843,8 @@ export default function PlanetDemo() {
 
 
     // ---------- Indizi, menu, aiuto ----------
+    let alwaysDay = false;
+    try { alwaysDay = localStorage.getItem("island_day") === "1"; } catch { /* ignora */ }
     const nearLabel = document.createElement("div");
     Object.assign(nearLabel.style, { position: "absolute", top: "160px", left: "12px", font: "12px system-ui, sans-serif", color: "#fff", background: "rgba(35,40,38,0.45)", padding: "3px 9px", borderRadius: "10px", zIndex: 22, pointerEvents: "none", maxWidth: "200px" });
     mount.appendChild(nearLabel);
@@ -1812,7 +1864,8 @@ export default function PlanetDemo() {
       const c = document.createElement("div");
       c.textContent = label;
       Object.assign(c.style, { padding: "9px 12px", borderRadius: "8px", cursor: "pointer", userSelect: "none", touchAction: "none", background: "rgba(255,255,255,0.14)" });
-      c.addEventListener("pointerdown", (e) => { e.stopPropagation(); menuPanel.style.display = "none"; fn(); });
+      c.addEventListener("pointerdown", (e) => e.stopPropagation());
+      c.addEventListener("click", (e) => { e.stopPropagation(); menuPanel.style.display = "none"; fn(); });
       menuPanel.appendChild(c);
     };
     const menuBtn = document.createElement("div");
@@ -1847,13 +1900,30 @@ export default function PlanetDemo() {
       u.searchParams.delete("test");
       return u.toString();
     }
-    async function invite() {
+    const shareEl = document.createElement("div");
+    Object.assign(shareEl.style, { position: "absolute", inset: "0", zIndex: 56, display: "none", alignItems: "center", justifyContent: "center", background: "rgba(10,20,25,0.6)" });
+    shareEl.innerHTML = '<div style="background:#fff;color:#223;width:min(360px,88%);padding:18px 20px;border-radius:18px;font:14px/1.5 system-ui,sans-serif;box-shadow:0 8px 30px rgba(0,0,0,.4)">' +
+      '<div style="font-size:18px;font-weight:700;margin-bottom:6px">Invita amici</div>' +
+      '<div style="margin-bottom:10px">Manda questo link: chi lo apre entra nel tuo stesso mondo.</div>' +
+      '<input id="shareInput" readonly style="width:100%;box-sizing:border-box;padding:9px;border:1px solid #bbb;border-radius:8px;font:13px system-ui,sans-serif">' +
+      '<div style="display:flex;gap:10px;margin-top:12px;justify-content:center">' +
+      '<span id="shareCopy" style="padding:9px 22px;border-radius:20px;background:#2c4a52;color:#fff;font-weight:700;cursor:pointer">Copia</span>' +
+      '<span id="shareClose" style="padding:9px 22px;border-radius:20px;background:#e3e7e8;color:#223;font-weight:700;cursor:pointer">Chiudi</span></div></div>';
+    mount.appendChild(shareEl);
+    const shareInput = shareEl.querySelector("#shareInput");
+    shareEl.addEventListener("pointerdown", (e) => e.stopPropagation());
+    shareEl.querySelector("#shareClose").addEventListener("click", () => (shareEl.style.display = "none"));
+    shareEl.querySelector("#shareCopy").addEventListener("click", async () => {
+      let ok = false;
+      try { await navigator.clipboard.writeText(shareInput.value); ok = true; } catch { /* prova il metodo vecchio */ }
+      if (!ok) { try { shareInput.focus(); shareInput.select(); ok = document.execCommand("copy"); } catch { ok = false; } }
+      toast(ok ? "Link copiato!" : "Seleziona il testo e copialo a mano");
+    });
+    function invite() {
       const link = inviteLink();
-      try {
-        if (navigator.share) { await navigator.share({ title: "Island", text: "Vieni a esplorare con me!", url: link }); return; }
-      } catch { /* annullato */ }
-      try { await navigator.clipboard.writeText(link); toast("Link copiato! Mandalo a chi vuoi invitare."); }
-      catch { window.prompt("Copia il link e mandalo ai tuoi amici:", link); }
+      if (navigator.share) { navigator.share({ title: "Island", text: "Vieni a esplorare con me!", url: link }).catch(() => {}); return; }
+      shareInput.value = link;
+      shareEl.style.display = "flex";
     }
     function leaveGame() {
       net.close();
@@ -1872,6 +1942,12 @@ export default function PlanetDemo() {
     menuItem("❓ Aiuto", showHelp);
     menuItem("\u{1F517} Invita amici", invite);
     menuItem("\u{1F504} Riconnetti", () => { if (net.connected) { toast("Sei gia' online"); return; } netStarted = true; net.reconnect(); toast("Mi riconnetto..."); });
+    menuItem("\u2600\uFE0F Giorno / notte: " + (alwaysDay ? "sempre giorno" : "automatico"), () => {
+      alwaysDay = !alwaysDay;
+      try { localStorage.setItem("island_day", alwaysDay ? "1" : "0"); } catch { /* ignora */ }
+      menuPanel.children[3].textContent = "\u2600\uFE0F Giorno / notte: " + (alwaysDay ? "sempre giorno" : "automatico");
+      toast(alwaysDay ? "Sempre giorno" : "Giorno e notte automatici");
+    });
     menuItem("\u{1F6AA} Esci", leaveGame);
     netLabel.style.pointerEvents = "auto";
     netLabel.style.cursor = "pointer";
@@ -2128,17 +2204,18 @@ export default function PlanetDemo() {
       if (mixer) mixer.update(dt);
 
       // Il sole gira attorno al pianeta: giorno e notte dipendono da DOVE ti trovi (terminatore reale).
-      const DAY_CYCLE_SECONDS = 600;
+      const DAY_CYCLE_SECONDS = 2400; // un giro completo del sole: 40 minuti
       const sunAngle = SUN_A0 - 0.7 + ((t % DAY_CYCLE_SECONDS) / DAY_CYCLE_SECONDS) * Math.PI * 2;
       sunDirVec.copy(SUN_U).multiplyScalar(Math.cos(sunAngle)).addScaledVector(SUN_V, Math.sin(sunAngle));
-      const sunHeight = charDir.dot(sunDirVec); // 1 = sole allo zenit, -1 = mezzanotte
-      const dayFactor = smoothstep(-0.12, 0.3, sunHeight);
-      const duskFactor = Math.max(0, 1 - Math.abs(sunHeight - 0.05) * 4);
-      sun.intensity = 0.03 + dayFactor * 1.1;
-      sun.color.set("#7a8ab0").lerp(dayColorTmp.set("#fff3da"), dayFactor).lerp(duskColorTmp.set("#ff9a5c"), duskFactor * 0.55);
-      hemi.intensity = 0.85 + dayFactor * 0.25;
-      hemi.color.set("#7886b8").lerp(dayColorTmp.set("#dfe8e6"), dayFactor);
-      skyMat.color.set("#3a4568").lerp(dayColorTmp.set("#ffffff"), dayFactor).lerp(duskColorTmp.set("#ffb27a"), duskFactor * 0.45);
+      const sunHeight = alwaysDay ? 1 : charDir.dot(sunDirVec); // 1 = sole allo zenit, -1 = mezzanotte
+      // transizione molto graduale (camminando non passi da giorno a buio in pochi secondi) e notte chiara
+      const dayFactor = smoothstep(-0.7, 0.45, sunHeight);
+      const duskFactor = alwaysDay ? 0 : Math.max(0, 1 - Math.abs(sunHeight - 0.05) * 3) * 0.8;
+      sun.intensity = 0.4 + dayFactor * 0.8;
+      sun.color.set("#a9b8e0").lerp(dayColorTmp.set("#fff3da"), dayFactor).lerp(duskColorTmp.set("#ff9a5c"), duskFactor * 0.55);
+      hemi.intensity = 1.0 + dayFactor * 0.1;
+      hemi.color.set("#98a6d6").lerp(dayColorTmp.set("#dfe8e6"), dayFactor);
+      skyMat.color.set("#6f80ae").lerp(dayColorTmp.set("#ffffff"), dayFactor).lerp(duskColorTmp.set("#ffb27a"), duskFactor * 0.45);
       scene.fog.color.copy(skyMat.color);
 
       // ---------- Clouds: orbit slowly around their own random axis ----------
@@ -2441,13 +2518,16 @@ export default function PlanetDemo() {
       mount.removeChild(moveVisual.nub);
       mount.removeChild(lookVisual.base);
       mount.removeChild(lookVisual.nub);
+      mount.removeEventListener("contextmenu", noCtx);
+      window.removeEventListener("blur", resetInput);
+      document.removeEventListener("visibilitychange", onVis);
       mount.removeChild(jumpBtn);
       mount.removeChild(actionBtn);
       mount.removeChild(muteBtn);
       mount.removeChild(audioPanel);
       mount.removeChild(mapCanvas);
       mount.removeChild(netLabel);
-      [placeHint, nearLabel, toastEl, menuBtn, menuPanel, helpEl, mapBackdrop].forEach((el) => el.parentNode && el.parentNode.removeChild(el));
+      [placeHint, nearLabel, toastEl, menuBtn, menuPanel, helpEl, mapBackdrop, mapCtl, shareEl].forEach((el) => el.parentNode && el.parentNode.removeChild(el));
       mount.removeChild(greetBtn);
       window.removeEventListener("keydown", onGreetKey);
       disposed = true;
