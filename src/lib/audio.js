@@ -110,11 +110,11 @@ export function createAudio() {
     toggle(name) { on[name] = !on[name]; applyBus(name); return on[name]; },
     isOn(name) { return on[name]; },
     step(rough = 1) {
-      burst(0.09, 700 + Math.random() * 500, 0.5 * rough);
-      tone(120 + Math.random() * 25, 55, 0.09, 0.32 * rough, "sine");
+      burst(0.06, 600 + Math.random() * 300, 0.1 * rough);
+      tone(110 + Math.random() * 20, 60, 0.07, 0.07 * rough, "sine");
     },
     jump() { burst(0.12, 900, 0.07, "bandpass"); tone(300, 520, 0.12, 0.04); },
-    land(power = 1) { burst(0.18, 380, 0.55 * power); tone(90, 45, 0.16, 0.4 * power, "sine"); },
+    land(power = 1) { burst(0.14, 380, 0.16 * power); tone(90, 50, 0.14, 0.12 * power, "sine"); },
     click() { tone(660, 880, 0.07, 0.07, "triangle"); },
     enter() { tone(392, 523, 0.14, 0.08, "triangle"); tone(523, 659, 0.16, 0.07, "triangle", 0.1); },
     exit() { tone(523, 392, 0.14, 0.08, "triangle"); tone(392, 294, 0.16, 0.07, "triangle", 0.1); },

@@ -1773,14 +1773,15 @@ export default function PlanetDemo() {
       animateLimbs(moving, dt);
 
       // passi + polvere, atterraggio morbido (squash)
-      if (moving && grounded) {
-        stepAcc += MOVE_SPEED * curSpeed * dt;
-        if (stepAcc > 1.2) {
-          stepAcc = 0;
-          audio.step();
-          puff(blob.position, charDir, 2, 0.5);
+      // un passo a ogni appoggio del piede: sincronizzato con la fase della camminata
+      const stepIdx = Math.floor(walkPhase / Math.PI);
+      if (moving && grounded && walkAmp > 0.5) {
+        if (stepIdx !== stepAcc) {
+          stepAcc = stepIdx;
+          audio.step(0.5 + 0.5 * curSpeed);
+          puff(blob.position, charDir, 1, 0.4);
         }
-      } else if (!moving) stepAcc = 1.0;
+      } else stepAcc = stepIdx;
       if (justLanded) {
         const power = Math.min(1, Math.abs(impactVel) / JUMP_SPEED);
         landSquash = power;
