@@ -2,6 +2,9 @@ import React, { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { loadModel } from "../lib/assetLoader.js";
 import { createAudio } from "../lib/audio.js";
+import { connectRelay } from "../lib/net.js";
+import { PLAYER_TINTS, applyPlayerTint } from "../lib/characterTint.js";
+import * as SkeletonUtils from "three/examples/jsm/utils/SkeletonUtils.js";
 
 // Draws N copies of a loaded model with ONE draw call (InstancedMesh) instead of N clones.
 function extractInstanceSources(gltf) {
@@ -834,12 +837,18 @@ export default function PlanetDemo() {
     }
     function syncRealAnim(moving) {
       if (!(idleAction || walkAction || jumpAction)) return;
+      if (waveAction && performance.now() < waveUntil && grounded && !moving) { setAnimAction(waveAction); return; }
       if (!grounded) setAnimAction(jumpAction ?? walkAction ?? idleAction);
       else if (moving) setAnimAction(walkAction ?? idleAction);
       else setAnimAction(idleAction);
     }
+    let anneGltf = null;
+    let waveAction = null;
+    let waveUntil = 0;
+    const findWaveClip = (anims) => anims.find((c) => /wave/i.test(c.name)) ?? anims.find((c) => /^yes$/i.test(c.name));
     loadModelT("/models/characters/Characters_Anne.gltf").then((gltf) => {
       if (!gltf) return;
+      anneGltf = gltf;
       const model = gltf.scene;
       const sc = 1.7 / (1.81 * 1.15);
       model.scale.setScalar(sc);
@@ -860,6 +869,8 @@ export default function PlanetDemo() {
         idleAction = idle ? mixer.clipAction(idle) : null;
         walkAction = walk ? mixer.clipAction(walk) : null;
         jumpAction = jump ? mixer.clipAction(jump) : null;
+        const wv = findWaveClip(gltf.animations);
+        waveAction = wv ? mixer.clipAction(wv) : null;
         setAnimAction(idleAction, 0);
       }
     });
@@ -1471,6 +1482,166 @@ export default function PlanetDemo() {
       }
     }
 
+    // ---------- Multiplayer (relay) ----------
+    const remotes = new Map(); // id -> { root, mixer, actions, curDir, tgtDir, facing, jump, moving, inside, bubble, waveUntil }
+    const relayUrl = (import.meta.env && import.meta.env.VITE_RELAY_URL) || `${location.protocol === "https:" ? "wss" : "ws"}://${location.hostname}:8787`;
+    const roomName = new URLSearchParams(location.search).get("room") || "main";
+    let myNetId = null;
+    let playersOnline = 1;
+    const netLabel = document.createElement("div");
+    Object.assign(netLabel.style, { position: "absolute", top: "134px", left: "12px", font: "12px system-ui, sans-serif", color: "#fff", background: "rgba(35,40,38,0.45)", padding: "3px 9px", borderRadius: "10px", zIndex: 22, pointerEvents: "none" });
+    netLabel.textContent = "○ offline";
+    mount.appendChild(netLabel);
+
+    function makeBubble() {
+      const c = document.createElement("canvas");
+      c.width = 64; c.height = 64;
+      const x = c.getContext("2d");
+      x.font = "44px serif"; x.textAlign = "center"; x.textBaseline = "middle";
+      x.fillText("\u{1F44B}", 32, 36);
+      const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), transparent: true, depthTest: false }));
+      sp.scale.set(0.9, 0.9, 1);
+      sp.position.y = 2.7;
+      sp.visible = false;
+      sp.renderOrder = 10;
+      return sp;
+    }
+    function addRemote(id, tintIdx) {
+      const root = new THREE.Group();
+      const r = { root, mixer: null, idle: null, walk: null, jumpA: null, waveA: null, cur: null, curDir: null, tgtDir: new THREE.Vector3(), facing: new THREE.Vector3(0, 0, 1), jump: 0, moving: false, inside: false, bubble: makeBubble(), waveUntil: 0 };
+      if (anneGltf) {
+        const model = SkeletonUtils.clone(anneGltf.scene);
+        applyPlayerTint(model, PLAYER_TINTS[tintIdx % PLAYER_TINTS.length], gradientMap);
+        model.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.frustumCulled = false; } });
+        root.add(model);
+        if (anneGltf.animations?.length) {
+          r.mixer = new THREE.AnimationMixer(model);
+          const find = (n) => anneGltf.animations.find((c) => c.name.toLowerCase() === n.toLowerCase());
+          const idle = find("Idle") ?? anneGltf.animations[0], walk = find("Walk"), jmp = find("Jump_Idle") ?? find("Jump"), wv = findWaveClip(anneGltf.animations);
+          r.idle = idle ? r.mixer.clipAction(idle) : null; r.walk = walk ? r.mixer.clipAction(walk) : null;
+          r.jumpA = jmp ? r.mixer.clipAction(jmp) : null; r.waveA = wv ? r.mixer.clipAction(wv) : null;
+          r.cur = r.idle; if (r.cur) r.cur.play();
+        }
+      } else {
+        const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.35, 0.9, 4, 8), new THREE.MeshToonMaterial({ color: PLAYER_TINTS[tintIdx % PLAYER_TINTS.length], gradientMap }));
+        body.position.y = 0.9;
+        root.add(body);
+      }
+      root.add(r.bubble);
+      root.visible = false;
+      scene.add(root);
+      remotes.set(id, r);
+      return r;
+    }
+    function removeRemote(id) {
+      const r = remotes.get(id);
+      if (!r) return;
+      scene.remove(r.root);
+      remotes.delete(id);
+    }
+    let net = { connected: false, send() {}, close() {} };
+    function startNet() {
+      if (disposed || net.connected || netStarted) return;
+      netStarted = true;
+      net = connectRelay({
+      url: `${relayUrl}/?room=${encodeURIComponent(roomName)}`,
+      onHello: (m) => {
+        myNetId = m.id;
+        // evita di spawnare sopra un altro giocatore: ognuno parte in un punto leggermente diverso
+        if (m.id > 1 && !inside) {
+          const ang = m.id * 1.0;
+          const rt = new THREE.Vector3().crossVectors(facing, charDir).normalize();
+          const tg = facing.clone().multiplyScalar(Math.cos(ang)).addScaledVector(rt, Math.sin(ang));
+          const cand = charDir.clone().addScaledVector(tg, 0.035 * (1 + Math.floor(m.id / 6) * 0.6)).normalize();
+          if (!isBlocked(cand)) charDir = cand;
+        }
+      },
+      onStatus: (ok) => {
+        if (!ok) { netLabel.textContent = "○ offline"; [...remotes.keys()].forEach(removeRemote); }
+        else netLabel.textContent = "● online";
+      },
+      onState: (m) => {
+        playersOnline = m.n;
+        netLabel.textContent = "● " + (m.n > 1 ? m.n + " nel mondo" : "da solo");
+        const present = new Set();
+        m.p.forEach((q) => {
+          present.add(q.id);
+          const r = remotes.get(q.id) ?? addRemote(q.id, q.c);
+          r.tgtDir.set(q.d[0], q.d[1], q.d[2]).normalize();
+          if (!r.curDir) r.curDir = r.tgtDir.clone();
+          r.facing.set(q.f[0], q.f[1], q.f[2]);
+          r.jump = q.j; r.moving = !!q.m; r.inside = !!q.i;
+        });
+        [...remotes.keys()].forEach((id) => { if (!present.has(id)) removeRemote(id); });
+      },
+      onWave: (m) => {
+        const r = remotes.get(m.id);
+        if (!r) return;
+        r.waveUntil = performance.now() + 1800;
+        if (r.curDir && r.curDir.dot(charDir) > 0.97) audio.greet();
+      },
+      onLeave: (m) => removeRemote(m.id),
+      });
+    }
+    let netStarted = false;
+    let disposed = false;
+    // ci si collega solo quando il modello del personaggio e' pronto, cosi' gli altri compaiono subito con il modello giusto
+    loadModelT("/models/characters/Characters_Anne.gltf").finally(() => setTimeout(startNet, 0));
+    const netFallback = setTimeout(startNet, 8000);
+    let netSendT = 0;
+    const tmpUp = new THREE.Vector3(), tmpPos = new THREE.Vector3(), tmpLook = new THREE.Vector3();
+    function updateRemotes(dt) {
+      remotes.forEach((r) => {
+        if (!r.curDir) return;
+        r.curDir.lerp(r.tgtDir, 1 - Math.exp(-dt * 10)).normalize();
+        r.root.visible = !r.inside;
+        if (r.inside) return;
+        const gr = groundRadiusAt(r.curDir);
+        tmpPos.copy(r.curDir).multiplyScalar(gr + r.jump);
+        r.root.position.copy(tmpPos);
+        r.root.up.copy(r.curDir);
+        tmpLook.copy(r.facing).addScaledVector(r.curDir, -r.facing.dot(r.curDir));
+        if (tmpLook.lengthSq() > 1e-6) { tmpLook.normalize().add(tmpPos); r.root.lookAt(tmpLook); }
+        const waving = performance.now() < r.waveUntil;
+        r.bubble.visible = waving;
+        if (r.mixer) {
+          const want = waving && !r.moving && r.jump < 0.05 && r.waveA ? r.waveA : r.jump > 0.05 ? (r.jumpA ?? r.walk ?? r.idle) : r.moving ? (r.walk ?? r.idle) : r.idle;
+          if (want && want !== r.cur) { want.reset().fadeIn(0.15).play(); if (r.cur) r.cur.fadeOut(0.15); r.cur = want; }
+          r.mixer.update(dt);
+        }
+      });
+    }
+    function sendNet(dt) {
+      netSendT -= dt;
+      if (netSendT > 0 || !net.connected) return;
+      netSendT = 0.1;
+      const d = inside ? inside.returnDir : charDir;
+      const f = inside ? inside.returnFacing : charFacing;
+      const q = (v) => Math.round(v * 1000) / 1000;
+      net.send({ t: "pos", d: [q(d.x), q(d.y), q(d.z)], f: [q(f.x), q(f.y), q(f.z)], j: q(inside ? 0 : jumpHeight), m: lastMoving ? 1 : 0, i: inside ? 1 : 0 });
+    }
+    let lastMoving = false;
+
+    // ---------- Pulsante "saluta" ----------
+    const greetBtn = document.createElement("div");
+    greetBtn.textContent = "\u{1F44B}";
+    Object.assign(greetBtn.style, {
+      position: "absolute", right: "28px", bottom: "150px", width: "56px", height: "56px", borderRadius: "50%",
+      background: "rgba(35,40,38,0.38)", border: "2px solid rgba(255,255,255,0.55)", display: "flex", alignItems: "center",
+      justifyContent: "center", fontSize: "26px", cursor: "pointer", userSelect: "none", touchAction: "none", zIndex: 22,
+    });
+    function doGreet() {
+      if (inside) return;
+      waveUntil = performance.now() + 1800;
+      audio.greet();
+      net.send({ t: "wave" });
+    }
+    greetBtn.addEventListener("pointerdown", (e) => { e.stopPropagation(); greetBtn.style.background = "rgba(217,164,65,0.55)"; doGreet(); });
+    greetBtn.addEventListener("pointerup", (e) => { e.stopPropagation(); greetBtn.style.background = "rgba(35,40,38,0.38)"; });
+    mount.appendChild(greetBtn);
+    const onGreetKey = (e) => { if (e.key === "g" || e.key === "G") doGreet(); };
+    window.addEventListener("keydown", onGreetKey);
+
     // ---------- Animation loop ----------
     let curSpeed = 0; // 0..1 velocita' corrente (accelerazione morbida)
     const lastMoveDir = new THREE.Vector3();
@@ -1662,6 +1833,9 @@ export default function PlanetDemo() {
         animateLimbs(moving, dt);
         audio.update(dt, 0, dayFactor, true);
         mapCanvas.style.display = "none";
+        lastMoving = moving;
+        updateRemotes(dt);
+        sendNet(dt);
         character.scale.set(1, 1, 1);
 
         // fixed cutaway camera, distance adapted to the screen shape so the whole room always fits
@@ -1793,6 +1967,9 @@ export default function PlanetDemo() {
       updateDust(dt);
       mapCanvas.style.display = "block";
       updateMinimap(dt);
+      lastMoving = moving;
+      updateRemotes(dt);
+      sendNet(dt);
       {
         const h = terrainHeight(charDir);
         audio.update(dt, Math.max(0.05, Math.min(1, 1 - (h - SEA_LEVEL) / 2.5)), dayFactor, false);
@@ -1857,6 +2034,12 @@ export default function PlanetDemo() {
       mount.removeChild(muteBtn);
       mount.removeChild(audioPanel);
       mount.removeChild(mapCanvas);
+      mount.removeChild(netLabel);
+      mount.removeChild(greetBtn);
+      window.removeEventListener("keydown", onGreetKey);
+      disposed = true;
+      clearTimeout(netFallback);
+      net.close();
       clearInterval(splashTimer);
       if (splash.parentNode) splash.parentNode.removeChild(splash);
       window.removeEventListener("pointerdown", startAudio);

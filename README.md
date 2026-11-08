@@ -90,3 +90,18 @@ con i modelli procedurali che con quelli veri.
   che il modello vero segue. Va benissimo per ora; se in futuro vuoi che le animazioni
   del modello siano guidate direttamente dallo stato di movimento (invece che da una clip
   fissa), è un passo successivo da fare insieme.
+
+## Multiplayer (relay)
+
+Il gioco funziona anche da solo. Per vedere altri giocatori serve il relay (Node, ~100 righe, nessun database):
+
+```bash
+npm install
+npm run relay            # ws://localhost:8787  (PORT=... per cambiare porta)
+npm run dev -- --host    # gioco; aprilo in due schede o da telefono sulla stessa Wi-Fi
+```
+
+- Stanza: `?room=nome` nell'URL (default `main`, max 12 giocatori per stanza).
+- Server remoto: `VITE_RELAY_URL=wss://tuodominio.it/relay npm run build` (nginx con proxy WebSocket davanti al relay).
+- `ALLOWED_ORIGIN=https://tuodominio.it` limita le origini ammesse.
+- Tasto **G** o pulsante 👋 per salutare.

@@ -1,6 +1,6 @@
 import React, { useEffect, useRef } from "react";
 import * as THREE from "three";
-import { SkeletonUtils } from "three/examples/jsm/utils/SkeletonUtils.js";
+import * as SkeletonUtils from "three/examples/jsm/utils/SkeletonUtils.js";
 import { loadModel } from "../lib/assetLoader.js";
 import { PLAYER_TINTS, applyPlayerTint } from "../lib/characterTint.js";
 
