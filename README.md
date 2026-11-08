@@ -110,3 +110,9 @@ npm run dev -- --host    # gioco; aprilo in due schede o da telefono sulla stess
 
 Sul pianeta ci sono 6 luoghi (segnati con un rombo giallo sulla minimappa) che si attivano solo se **almeno 2 persone** stanno nel cerchio: fontana, cerchio di pietre, altalena, lanterne del cielo, prato fiorito, campane del vento.
 Per provarli da solo: apri il gioco con `?test=1` (simula un secondo giocatore).
+
+## Controlli e menu
+
+- Sinistra: muoviti · destra: guarda · 👋 / tasto G: saluta · ENTRA: entra nelle case (anche insieme ad altri giocatori).
+- Tocca la **minimappa** per ingrandirla (mostra tutto il pianeta, i luoghi speciali col nome e gli altri giocatori in azzurro).
+- ☰ → Aiuto, Invita amici (link alla stanza), Riconnetti, Esci. Tocca "offline" per riconnetterti.

@@ -66,10 +66,33 @@ function seaMask(dir) {
   }
   return m; // 1 deep inside a sea region, fading to 0 outside SEA_RADIUS
 }
+// Catene montuose: cime lontane dai mari e dal punto di partenza.
+const MOUNTAINS = [
+  { c: new THREE.Vector3(0.9, 0.2, -0.4).normalize(), r: 0.58, h: 8.0 },
+  { c: new THREE.Vector3(-0.8, -0.4, 0.45).normalize(), r: 0.52, h: 7.0 },
+  { c: new THREE.Vector3(0.2, -0.9, -0.3).normalize(), r: 0.5, h: 6.2 },
+  { c: new THREE.Vector3(0.5, -0.2, -0.8).normalize(), r: 0.4, h: 5.0 },
+];
+function mountainAt(dir) {
+  let m = 0;
+  for (const mt of MOUNTAINS) {
+    const k = 1 - smoothstep(0.0, mt.r, dir.angleTo(mt.c));
+    if (k <= 0) continue;
+    const ridge = 0.85 + 0.15 * Math.sin(dir.x * 23 + dir.y * 17 + dir.z * 29);
+    m = Math.max(m, mt.h * k * k * ridge);
+  }
+  return m;
+}
+function hillsAt(dir) {
+  // colline morbide sparse su tutto il pianeta
+  const a = Math.sin(dir.dot(new THREE.Vector3(0.7, 0.2, -0.6)) * 7.5 + 1.3);
+  const b = Math.sin(dir.dot(new THREE.Vector3(-0.3, 0.8, 0.5)) * 9.1 + 0.4);
+  return Math.max(0, a * b) * 2.2;
+}
 function terrainHeight(dir) {
   const noise = noiseAt(dir);
   const mask = seaMask(dir);
-  const landH = noise * 0.55 + 1.0; // real hills/mountains, always comfortably above sea level
+  const landH = noise * 0.55 + 1.0 + hillsAt(dir) + mountainAt(dir); // colline e montagne vere
   const seaH = noise * 0.3 - 2.2; // genuinely deep water inside the two sea regions
   return landH * (1 - mask) + seaH * mask;
 }
@@ -172,8 +195,8 @@ export default function PlanetDemo() {
       posAttr.setXYZ(i, dir.x * (PLANET_R + h), dir.y * (PLANET_R + h), dir.z * (PLANET_R + h));
       if (h < SEA_LEVEL + 0.35) tmpColor.copy(sandC);
       else if (h < 1.1) tmpColor.copy(sandC).lerp(grassC, smoothstep(SEA_LEVEL + 0.35, 1.1, h));
-      else if (h < 1.7) tmpColor.copy(grassC).lerp(rockC, smoothstep(1.1, 1.7, h));
-      else tmpColor.copy(rockC).lerp(snowC, smoothstep(1.7, 2.0, h));
+      else if (h < 3.4) tmpColor.copy(grassC).lerp(rockC, smoothstep(2.6, 3.4, h));
+      else tmpColor.copy(rockC).lerp(snowC, smoothstep(5.6, 6.6, h));
       colors.push(tmpColor.r, tmpColor.g, tmpColor.b);
     }
     planetGeo.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
@@ -269,13 +292,41 @@ export default function PlanetDemo() {
     const foliageMat = new THREE.MeshToonMaterial({ color: PALETTE.foliage, gradientMap });
     const rockMat = new THREE.MeshToonMaterial({ color: PALETTE.rock, gradientMap });
     const bushMat = new THREE.MeshToonMaterial({ color: "#5f7a4f", gradientMap });
+    // ---------- Posizione dei villaggi (decisa prima della vegetazione, cosi' gli alberi non li bloccano) ----------
+    const VILLAGES = [];
+    {
+      const cands = [];
+      const N = 160;
+      for (let i = 0; i < N; i++) {
+        const y = 1 - (2 * (i + 0.5)) / N, rr = Math.sqrt(1 - y * y), th = i * 2.399963;
+        cands.push(new THREE.Vector3(Math.cos(th) * rr, y, Math.sin(th) * rr));
+      }
+      const spawn0 = new THREE.Vector3(0, 1, 0);
+      cands.sort((a, b) => a.angleTo(spawn0) - b.angleTo(spawn0));
+      for (const c of cands) {
+        if (VILLAGES.length >= 4) break;
+        if (VILLAGES.some((v) => v.angleTo(c) < 0.95)) continue;
+        let ok = true;
+        const ref = Math.abs(c.y) < 0.9 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
+        const t1 = new THREE.Vector3().crossVectors(ref, c).normalize();
+        const t2 = new THREE.Vector3().crossVectors(c, t1).normalize();
+        for (let k = -1; k < 8 && ok; k++) {
+          const q = k < 0 ? c.clone() : c.clone().addScaledVector(t1, Math.cos((k / 8) * 6.283) * 0.36).addScaledVector(t2, Math.sin((k / 8) * 6.283) * 0.36).normalize();
+          const h = terrainHeight(q);
+          if (h < SEA_LEVEL + 0.7 || h > 3.2) ok = false;
+        }
+        if (ok) VILLAGES.push(c.clone());
+      }
+    }
+    const nearVillage = (d) => VILLAGES.some((v) => v.angleTo(d) < 0.5);
     const decor = { tree: [], bush: [], rock: [] };
-    for (let i = 0; i < 150; i++) {
+    for (let i = 0; i < 520; i++) {
       const d = randomDir();
       const h = terrainHeight(d);
       if (h < SEA_LEVEL + 0.05) continue; // keep the beaches clear
+      if (nearVillage(d)) continue;
       const surf = getSurfacePoint(d);
-      if (h < 1.4) {
+      if (h < 4.2 && (h < 2.6 || rand() < 0.55)) {
         // tree
         const scale = 2.5 + rand() * 1.7;
         const group = new THREE.Group();
@@ -293,7 +344,7 @@ export default function PlanetDemo() {
         scene.add(group);
         decor.tree.push({ obj: group, pos: surf.point.clone(), quat: group.quaternion.clone(), scale: 0.8 + ((scale - 2.5) / 1.7) * 0.45 });
         obstacles.push({ dir: d.clone(), r: (0.32 * scale) / PLANET_R });
-      } else if (h < 1.5) {
+      } else if (h < 3.4) {
         // bush (rounded shrub, smaller than trees, tucked in the same grass/rock transition band)
         const scale = 0.5 + rand() * 0.6;
         const bush = new THREE.Mesh(new THREE.IcosahedronGeometry(0.55, 1), bushMat);
@@ -469,7 +520,7 @@ export default function PlanetDemo() {
       }
       return new THREE.Vector3(0.35, 0.85, 0.25).normalize();
     }
-    const villageCenter = findVillageSpot();
+    const villageCenter = VILLAGES[0] ? VILLAGES[0].clone() : findVillageSpot();
 
     // ---------- Buildings ----------
     // Three building types. Footprints are those of the real Pirate-kit houses (scaled by HS so the
@@ -597,29 +648,59 @@ export default function PlanetDemo() {
       return rec;
     }
 
-    // village: a ring of buildings around the center, all facing it
-    const villageTypeOrder = [0, 2, 1, 2, 1];
-    const tangentA = new THREE.Vector3(1, 0, 0).addScaledVector(villageCenter, -villageCenter.x).normalize();
-    const tangentB = new THREE.Vector3().crossVectors(villageCenter, tangentA).normalize();
-    for (let i = 0; i < villageTypeOrder.length; i++) {
-      const angle = (i / villageTypeOrder.length) * Math.PI * 2 + 0.3;
-      const offsetDist = 17 / PLANET_R;
-      const hutDir = villageCenter.clone().addScaledVector(tangentA, Math.cos(angle) * offsetDist).addScaledVector(tangentB, Math.sin(angle) * offsetDist).normalize();
-      const towardRaw = villageCenter.clone().sub(hutDir);
-      const T = BUILDING_TYPES[villageTypeOrder[i]];
-      const bR = Math.hypot((T.x1 - T.x0) / 2, (T.z1 - T.z0) / 2) + 1;
-      let clear = true;
-      for (let k = 0; k < obstacles.length; k++) {
-        if (hutDir.angleTo(obstacles[k].dir) < obstacles[k].r + bR / PLANET_R) {
-          clear = false;
-          break;
-        }
-      }
-      if (clear) placeBuilding(hutDir, towardRaw, villageTypeOrder[i], 1.6);
+    // villaggi: un anello di case rivolte verso la piazza, con pozzo, lampioni e stradine
+    const wellStone = new THREE.MeshToonMaterial({ color: "#8d8a84", gradientMap });
+    const lampGlow = new THREE.MeshBasicMaterial({ color: "#ffd98a" });
+    const lampPost = new THREE.MeshToonMaterial({ color: "#3b3a3c", gradientMap });
+    function orientUp(obj, surf) {
+      obj.position.copy(surf.point);
+      obj.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), surf.normal);
     }
+    function addWell(dir) {
+      const surf = getSurfacePoint(dir);
+      const g = new THREE.Group();
+      const ring = new THREE.Mesh(new THREE.CylinderGeometry(1.0, 1.1, 0.9, 12), wellStone); ring.position.y = 0.45; ring.castShadow = true; g.add(ring);
+      const water = new THREE.Mesh(new THREE.CylinderGeometry(0.8, 0.8, 0.05, 12), new THREE.MeshBasicMaterial({ color: "#5aa6c8" })); water.position.y = 0.88; g.add(water);
+      [-1, 1].forEach((sd) => { const post = new THREE.Mesh(new THREE.BoxGeometry(0.12, 1.7, 0.12), woodPostMat); post.position.set(sd * 0.95, 1.2, 0); g.add(post); });
+      const roof = new THREE.Mesh(new THREE.ConeGeometry(1.5, 0.8, 4), roofMats[0]); roof.position.y = 2.3; roof.rotation.y = Math.PI / 4; roof.castShadow = true; g.add(roof);
+      orientUp(g, surf); scene.add(g);
+      obstacles.push({ dir: dir.clone(), r: 1.5 / PLANET_R });
+    }
+    function addLamp(dir) {
+      const surf = getSurfacePoint(dir);
+      const g = new THREE.Group();
+      const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.07, 2.4, 6), lampPost); pole.position.y = 1.2; g.add(pole);
+      const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.2, 8, 6), lampGlow); lamp.position.y = 2.5; g.add(lamp);
+      orientUp(g, surf); scene.add(g);
+      obstacles.push({ dir: dir.clone(), r: 0.3 / PLANET_R });
+    }
+    const woodPostMat = new THREE.MeshToonMaterial({ color: "#6b4a2e", gradientMap });
+    const VILLAGE_ORDERS = [[0, 2, 1, 2, 1, 0, 2], [1, 0, 2, 0, 1, 2], [2, 1, 0, 1, 2, 0], [0, 1, 2, 1, 0]];
+    VILLAGES.forEach((vc, vi) => {
+      const order = VILLAGE_ORDERS[vi % VILLAGE_ORDERS.length];
+      const ta = new THREE.Vector3(1, 0, 0).addScaledVector(vc, -vc.x).normalize();
+      const tb = new THREE.Vector3().crossVectors(vc, ta).normalize();
+      const ringAt = (angle, dist) => vc.clone().addScaledVector(ta, Math.cos(angle) * dist).addScaledVector(tb, Math.sin(angle) * dist).normalize();
+      addWell(vc);
+      for (let i = 0; i < order.length; i++) {
+        const angle = (i / order.length) * Math.PI * 2 + 0.3 + vi;
+        const hutDir = ringAt(angle, 17 / PLANET_R);
+        const T = BUILDING_TYPES[order[i]];
+        const bR = Math.hypot((T.x1 - T.x0) / 2, (T.z1 - T.z0) / 2) + 1;
+        let clear = true;
+        for (let k = 0; k < obstacles.length; k++) {
+          if (hutDir.angleTo(obstacles[k].dir) < obstacles[k].r + bR / PLANET_R) { clear = false; break; }
+        }
+        if (clear && placeBuilding(hutDir, vc.clone().sub(hutDir), order[i], 1.8)) {
+          buildRoad(vc, ringAt(angle, 11 / PLANET_R), 5);
+        }
+        const lampDir = ringAt(angle + Math.PI / order.length, 12 / PLANET_R);
+        if (terrainHeight(lampDir) > SEA_LEVEL + 0.5) addLamp(lampDir);
+      }
+    });
 
     // the rest of the town, spread over the dry land
-    const SCATTERED_BUILDING_COUNT = 10;
+    const SCATTERED_BUILDING_COUNT = 12;
     let scatteredBuilt = 0;
     let scatterAttempts = 0;
     while (scatteredBuilt < SCATTERED_BUILDING_COUNT && scatterAttempts < 5000) {
@@ -679,6 +760,7 @@ export default function PlanetDemo() {
       for (let i = 0; i <= steps; i++) {
         const tt = i / steps;
         const d = slerpDir(tt);
+        if (terrainHeight(d) < SEA_LEVEL + 0.25) continue;
         const dNext = slerpDir(Math.min(1, tt + 0.01));
         const surf = getSurfacePoint(d);
         const rawTangent = dNext.clone().sub(d);
@@ -691,7 +773,8 @@ export default function PlanetDemo() {
         scene.add(tile);
       }
     }
-    buildRoad(findLandSpawn(), villageCenter, 28);
+    buildRoad(findLandSpawn(), villageCenter, Math.max(6, Math.round((findLandSpawn().angleTo(villageCenter) * PLANET_R) / 1.1)));
+    for (let i = 0; i + 1 < VILLAGES.length; i++) buildRoad(VILLAGES[i], VILLAGES[i + 1], Math.round((VILLAGES[i].angleTo(VILLAGES[i + 1]) * PLANET_R) / 1.1));
 
     // ---------- Character (low-poly humanoid, joint-based rig) ----------
     const jacketMat = new THREE.MeshToonMaterial({ color: "#c1503f", gradientMap });
@@ -1178,7 +1261,7 @@ export default function PlanetDemo() {
       if (!p) return;
       const dx = e.clientX - p.startX;
       const dy = e.clientY - p.startY;
-      const max = 55;
+      const max = p.role === "move" ? 55 : 80;
       const len = Math.min(max, Math.hypot(dx, dy));
       const ang = Math.atan2(dy, dx);
       const nx = (Math.cos(ang) * len) / max;
@@ -1388,29 +1471,56 @@ export default function PlanetDemo() {
       if (splashGone) return;
       splashGone = true;
       audio.start();
+      try { startNet(); } catch { /* non ancora pronto */ }
       splash.style.opacity = "0";
       splash.style.pointerEvents = "none";
-      setTimeout(() => splash.parentNode && splash.parentNode.removeChild(splash), 800);
+      setTimeout(() => { if (splashGone) splash.style.display = "none"; }, 800);
+      if (!helpSeen) {
+        helpSeen = true;
+        try { localStorage.setItem("island_help", "1"); } catch { /* ignora */ }
+        setTimeout(() => showHelp(), 900);
+      }
     }
     enterBtn.addEventListener("pointerdown", (e) => { e.stopPropagation(); closeSplash(); });
 
     // ---------- Minimappa (proiezione azimutale centrata su di te, "avanti" = su) ----------
-    const MAP_PX = 112, MAP_RES = 36, MAP_ANG = 1.5;
+    let MAP_PX = 112, MAP_RES = 36, MAP_ANG = 1.5, mapBig = false;
     const mapCanvas = document.createElement("canvas");
     mapCanvas.width = MAP_PX; mapCanvas.height = MAP_PX;
-    Object.assign(mapCanvas.style, { position: "absolute", top: "12px", left: "12px", width: MAP_PX + "px", height: MAP_PX + "px", borderRadius: "50%", border: "3px solid rgba(255,255,255,.75)", background: "#123", zIndex: 22, pointerEvents: "none", boxShadow: "0 2px 10px rgba(0,0,0,.3)" });
+    Object.assign(mapCanvas.style, { position: "absolute", top: "12px", left: "12px", width: MAP_PX + "px", height: MAP_PX + "px", borderRadius: "50%", border: "3px solid rgba(255,255,255,.75)", background: "#123", zIndex: 22, boxShadow: "0 2px 10px rgba(0,0,0,.3)" });
     mount.appendChild(mapCanvas);
     const mctx = mapCanvas.getContext("2d");
     const mapTmp = document.createElement("canvas");
     mapTmp.width = MAP_RES; mapTmp.height = MAP_RES;
     const mtx = mapTmp.getContext("2d");
-    const mapImg = mtx.createImageData(MAP_RES, MAP_RES);
+    let mapImg = mtx.createImageData(MAP_RES, MAP_RES);
     let mapTimer = 0;
+    const mapBackdrop = document.createElement("div");
+    Object.assign(mapBackdrop.style, { position: "absolute", inset: "0", background: "rgba(10,20,25,0.55)", zIndex: 44, display: "none" });
+    mount.appendChild(mapBackdrop);
+    function applyMapSize() {
+      MAP_PX = mapBig ? Math.max(220, Math.min(380, window.innerWidth - 32, window.innerHeight - 100)) : 112;
+      MAP_RES = mapBig ? 96 : 36;
+      MAP_ANG = mapBig ? Math.PI * 0.995 : 1.5;
+      mapCanvas.width = MAP_PX; mapCanvas.height = MAP_PX;
+      mapTmp.width = MAP_RES; mapTmp.height = MAP_RES;
+      mapImg = mtx.createImageData(MAP_RES, MAP_RES);
+      Object.assign(mapCanvas.style, mapBig
+        ? { width: MAP_PX + "px", height: MAP_PX + "px", top: "50%", left: "50%", transform: "translate(-50%,-50%)", zIndex: 45 }
+        : { width: "112px", height: "112px", top: "12px", left: "12px", transform: "none", zIndex: 22 });
+      mapBackdrop.style.display = mapBig ? "block" : "none";
+      mapTimer = 0;
+    }
+    mapCanvas.style.pointerEvents = "auto";
+    mapCanvas.style.cursor = "pointer";
+    const toggleMap = (e) => { e.stopPropagation(); mapBig = !mapBig; applyMapSize(); };
+    mapCanvas.addEventListener("pointerdown", toggleMap);
+    mapBackdrop.addEventListener("pointerdown", toggleMap);
     const mpR = new THREE.Vector3(), mpD = new THREE.Vector3(), mpT = new THREE.Vector3();
     function updateMinimap(dt) {
       mapTimer -= dt;
       if (mapTimer > 0) return;
-      mapTimer = 0.25;
+      mapTimer = mapBig ? 0.5 : 0.25;
       mpR.crossVectors(facing, charDir).normalize();
       for (let j = 0; j < MAP_RES; j++) {
         for (let i = 0; i < MAP_RES; i++) {
@@ -1425,7 +1535,8 @@ export default function PlanetDemo() {
           let c;
           if (h <= SEA_LEVEL + 0.15) c = [70, 130, 168];
           else if (h < SEA_LEVEL + 0.9) c = [226, 208, 150];
-          else if (h > 3.2) c = [128, 126, 122];
+          else if (h > 5.8) c = [240, 240, 244];
+          else if (h > 3.6) c = [128, 126, 122];
           else c = [128, 170, 98];
           mapImg.data[o] = c[0]; mapImg.data[o + 1] = c[1]; mapImg.data[o + 2] = c[2]; mapImg.data[o + 3] = 255;
         }
@@ -1455,9 +1566,23 @@ export default function PlanetDemo() {
         const tl = mpT.length();
         if (tl < 1e-5) continue;
         const rr = (ang / MAP_ANG) * Rm, cx = Rm + (mpT.dot(mpR) / tl) * rr, cy = Rm - (mpT.dot(facing) / tl) * rr;
+        const k = mapBig ? 1.5 : 1;
         mctx.fillStyle = places[i].act > 0.5 ? "#ffffff" : "#ffd35c"; mctx.strokeStyle = "#7a5a00"; mctx.lineWidth = 1;
-        mctx.beginPath(); mctx.moveTo(cx, cy - 5); mctx.lineTo(cx + 4, cy); mctx.lineTo(cx, cy + 5); mctx.lineTo(cx - 4, cy); mctx.closePath(); mctx.fill(); mctx.stroke();
+        mctx.beginPath(); mctx.moveTo(cx, cy - 5 * k); mctx.lineTo(cx + 4 * k, cy); mctx.lineTo(cx, cy + 5 * k); mctx.lineTo(cx - 4 * k, cy); mctx.closePath(); mctx.fill(); mctx.stroke();
+        if (mapBig) { mctx.font = "600 11px system-ui, sans-serif"; mctx.lineWidth = 3; mctx.strokeStyle = "rgba(0,0,0,.65)"; mctx.strokeText(places[i].name, cx + 9, cy + 4); mctx.fillStyle = "#fff"; mctx.fillText(places[i].name, cx + 9, cy + 4); }
       }
+      remotes.forEach((r) => {
+        if (!r.curDir) return;
+        mpD.copy(r.curDir);
+        const dp = mpD.dot(charDir), ang = Math.acos(Math.min(1, Math.max(-1, dp)));
+        if (ang > MAP_ANG * 0.99) return;
+        mpT.copy(mpD).addScaledVector(charDir, -dp);
+        const tl = mpT.length();
+        const rr = (ang / MAP_ANG) * Rm;
+        const cx = tl < 1e-5 ? Rm : Rm + (mpT.dot(mpR) / tl) * rr, cy = tl < 1e-5 ? Rm : Rm - (mpT.dot(facing) / tl) * rr;
+        mctx.fillStyle = "#4fe3ff"; mctx.strokeStyle = "#fff"; mctx.lineWidth = 2;
+        mctx.beginPath(); mctx.arc(cx, cy, mapBig ? 6 : 4, 0, 6.283); mctx.fill(); mctx.stroke();
+      });
       mctx.fillStyle = "#fff"; mctx.strokeStyle = "#222"; mctx.lineWidth = 1.5;
       mctx.beginPath(); mctx.moveTo(Rm, Rm - 6); mctx.lineTo(Rm + 5, Rm + 5); mctx.lineTo(Rm - 5, Rm + 5); mctx.closePath(); mctx.fill(); mctx.stroke();
     }
@@ -1519,7 +1644,7 @@ export default function PlanetDemo() {
     }
     function addRemote(id, tintIdx) {
       const root = new THREE.Group();
-      const r = { root, mixer: null, idle: null, walk: null, jumpA: null, waveA: null, cur: null, curDir: null, tgtDir: new THREE.Vector3(), facing: new THREE.Vector3(0, 0, 1), jump: 0, moving: false, inside: false, bubble: makeBubble(), waveUntil: 0 };
+      const r = { root, mixer: null, idle: null, walk: null, jumpA: null, waveA: null, cur: null, curDir: null, tgtDir: new THREE.Vector3(), facing: new THREE.Vector3(0, 0, 1), jump: 0, moving: false, inside: false, bubble: makeBubble(), waveUntil: 0, b: -1, rh: 0, ip: new THREE.Vector3(), ipT: new THREE.Vector3(), ipInit: false };
       if (anneGltf) {
         const model = SkeletonUtils.clone(anneGltf.scene);
         applyPlayerTint(model, PLAYER_TINTS[tintIdx % PLAYER_TINTS.length], gradientMap);
@@ -1550,7 +1675,7 @@ export default function PlanetDemo() {
       scene.remove(r.root);
       remotes.delete(id);
     }
-    let net = { connected: false, send() {}, close() {} };
+    let net = { connected: false, send() {}, close() {}, reconnect() {} };
     function startNet() {
       if (disposed || net.connected || netStarted) return;
       netStarted = true;
@@ -1568,7 +1693,7 @@ export default function PlanetDemo() {
         }
       },
       onStatus: (ok) => {
-        if (!ok) { netLabel.textContent = "○ offline"; [...remotes.keys()].forEach(removeRemote); }
+        if (!ok) { netLabel.textContent = "○ offline — tocca per riconnettere"; [...remotes.keys()].forEach(removeRemote); }
         else netLabel.textContent = "● online";
       },
       onState: (m) => {
@@ -1582,6 +1707,8 @@ export default function PlanetDemo() {
           if (!r.curDir) r.curDir = r.tgtDir.clone();
           r.facing.set(q.f[0], q.f[1], q.f[2]);
           r.jump = q.j; r.moving = !!q.m; r.inside = !!q.i;
+          r.b = q.b ?? -1; r.rh = q.rh || 0; r.ipT.set(q.rx || 0, 0, q.rz || 0);
+          if (!r.ipInit) { r.ip.copy(r.ipT); r.ipInit = true; }
         });
         [...remotes.keys()].forEach((id) => { if (!present.has(id)) removeRemote(id); });
       },
@@ -1605,14 +1732,25 @@ export default function PlanetDemo() {
       remotes.forEach((r) => {
         if (!r.curDir) return;
         r.curDir.lerp(r.tgtDir, 1 - Math.exp(-dt * 10)).normalize();
-        r.root.visible = !r.inside;
-        if (r.inside) return;
-        const gr = groundRadiusAt(r.curDir);
-        tmpPos.copy(r.curDir).multiplyScalar(gr + r.jump);
-        r.root.position.copy(tmpPos);
-        r.root.up.copy(r.curDir);
-        tmpLook.copy(r.facing).addScaledVector(r.curDir, -r.facing.dot(r.curDir));
-        if (tmpLook.lengthSq() > 1e-6) { tmpLook.normalize().add(tmpPos); r.root.lookAt(tmpLook); }
+        if (r.inside) {
+          // dentro un edificio: lo vedi solo se sei nello stesso edificio
+          r.root.visible = !!inside && inside.bIdx === r.b;
+          if (!r.root.visible) return;
+          r.ip.lerp(r.ipT, 1 - Math.exp(-dt * 10));
+          tmpPos.set(r.ip.x, r.jump, r.ip.z);
+          r.root.position.copy(tmpPos);
+          r.root.up.set(0, 1, 0);
+          r.root.lookAt(tmpPos.x + Math.sin(r.rh), tmpPos.y, tmpPos.z + Math.cos(r.rh));
+        } else {
+          r.root.visible = !inside;
+          if (inside) return;
+          const gr = groundRadiusAt(r.curDir);
+          tmpPos.copy(r.curDir).multiplyScalar(gr + r.jump);
+          r.root.position.copy(tmpPos);
+          r.root.up.copy(r.curDir);
+          tmpLook.copy(r.facing).addScaledVector(r.curDir, -r.facing.dot(r.curDir));
+          if (tmpLook.lengthSq() > 1e-6) { tmpLook.normalize().add(tmpPos); r.root.lookAt(tmpLook); }
+        }
         const waving = performance.now() < r.waveUntil;
         r.bubble.visible = waving;
         if (r.mixer) {
@@ -1629,7 +1767,7 @@ export default function PlanetDemo() {
       const d = inside ? inside.returnDir : charDir;
       const f = inside ? inside.returnFacing : charFacing;
       const q = (v) => Math.round(v * 1000) / 1000;
-      net.send({ t: "pos", d: [q(d.x), q(d.y), q(d.z)], f: [q(f.x), q(f.y), q(f.z)], j: q(inside ? 0 : jumpHeight), m: lastMoving ? 1 : 0, i: inside ? 1 : 0 });
+      net.send({ t: "pos", d: [q(d.x), q(d.y), q(d.z)], f: [q(f.x), q(f.y), q(f.z)], j: q(inside ? jumpHeight : jumpHeight), m: lastMoving ? 1 : 0, i: inside ? 1 : 0, b: inside ? inside.bIdx : -1, rx: inside ? q(inPos.x) : 0, rz: inside ? q(inPos.z) : 0, rh: inside ? q(Math.atan2(inHeading.x, inHeading.z)) : 0 });
     }
     let lastMoving = false;
 
@@ -1637,7 +1775,7 @@ export default function PlanetDemo() {
     const greetBtn = document.createElement("div");
     greetBtn.textContent = "\u{1F44B}";
     Object.assign(greetBtn.style, {
-      position: "absolute", right: "28px", bottom: "150px", width: "56px", height: "56px", borderRadius: "50%",
+      position: "fixed", right: "112px", bottom: "40px", width: "56px", height: "56px", borderRadius: "50%",
       background: "rgba(35,40,38,0.38)", border: "2px solid rgba(255,255,255,0.55)", display: "flex", alignItems: "center",
       justifyContent: "center", fontSize: "26px", cursor: "pointer", userSelect: "none", touchAction: "none", zIndex: 22,
     });
@@ -1653,6 +1791,95 @@ export default function PlanetDemo() {
     const onGreetKey = (e) => { if (e.key === "g" || e.key === "G") doGreet(); };
     window.addEventListener("keydown", onGreetKey);
 
+
+    // ---------- Indizi, menu, aiuto ----------
+    const nearLabel = document.createElement("div");
+    Object.assign(nearLabel.style, { position: "absolute", top: "160px", left: "12px", font: "12px system-ui, sans-serif", color: "#fff", background: "rgba(35,40,38,0.45)", padding: "3px 9px", borderRadius: "10px", zIndex: 22, pointerEvents: "none", maxWidth: "200px" });
+    mount.appendChild(nearLabel);
+    const toastEl = document.createElement("div");
+    Object.assign(toastEl.style, { position: "absolute", top: "64px", left: "50%", transform: "translateX(-50%)", font: "14px system-ui, sans-serif", color: "#fff", background: "rgba(35,40,38,0.75)", padding: "9px 18px", borderRadius: "16px", zIndex: 30, pointerEvents: "none", opacity: "0", transition: "opacity .4s", textAlign: "center", maxWidth: "86%" });
+    mount.appendChild(toastEl);
+    let toastTimer = null;
+    function toast(msg, ms = 4500) {
+      toastEl.textContent = msg;
+      toastEl.style.opacity = "1";
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => (toastEl.style.opacity = "0"), ms);
+    }
+    const menuPanel = document.createElement("div");
+    Object.assign(menuPanel.style, { position: "absolute", top: "58px", right: "12px", padding: "8px", borderRadius: "12px", display: "none", background: "rgba(35,40,38,0.78)", color: "#fff", font: "14px system-ui, sans-serif", zIndex: 23, flexDirection: "column", gap: "6px", minWidth: "170px" });
+    const menuItem = (label, fn) => {
+      const c = document.createElement("div");
+      c.textContent = label;
+      Object.assign(c.style, { padding: "9px 12px", borderRadius: "8px", cursor: "pointer", userSelect: "none", touchAction: "none", background: "rgba(255,255,255,0.14)" });
+      c.addEventListener("pointerdown", (e) => { e.stopPropagation(); menuPanel.style.display = "none"; fn(); });
+      menuPanel.appendChild(c);
+    };
+    const menuBtn = document.createElement("div");
+    menuBtn.textContent = "☰";
+    Object.assign(menuBtn.style, { position: "absolute", top: "12px", right: "60px", width: "40px", height: "40px", borderRadius: "50%", background: "rgba(35,40,38,0.38)", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "20px", cursor: "pointer", userSelect: "none", touchAction: "none", zIndex: 22 });
+    menuBtn.addEventListener("pointerdown", (e) => {
+      e.stopPropagation();
+      audioPanel.style.display = "none";
+      menuPanel.style.display = menuPanel.style.display === "none" ? "flex" : "none";
+    });
+    mount.appendChild(menuBtn);
+    mount.appendChild(menuPanel);
+    muteBtn.addEventListener("pointerdown", () => { menuPanel.style.display = "none"; });
+
+    const helpEl = document.createElement("div");
+    Object.assign(helpEl.style, { position: "absolute", inset: "0", zIndex: 55, display: "none", alignItems: "center", justifyContent: "center", background: "rgba(10,20,25,0.6)" });
+    helpEl.innerHTML = '<div style="background:#fff;color:#223;max-width:340px;margin:16px;padding:20px 22px;border-radius:18px;font:14px/1.55 system-ui,sans-serif;box-shadow:0 8px 30px rgba(0,0,0,.4)">' +
+      '<div style="font-size:19px;font-weight:700;margin-bottom:8px">Come si gioca</div>' +
+      '<div>\u{1F449} <b>Muoviti</b>: trascina a sinistra. <b>Guarda</b>: trascina a destra.</div>' +
+      '<div>\u{1F3E0} Vicino a una porta premi <b>ENTRA</b>.</div>' +
+      '<div>\u{1F44B} <b>Saluta</b> chi incontri (tasto G sul PC).</div>' +
+      '<div>\u{1F5FA}️ <b>Tocca la mappa</b> per ingrandirla: i rombi gialli sono i <b>luoghi speciali</b>.</div>' +
+      '<div>✨ Un luogo speciale si attiva solo se <b>almeno 2 persone</b> stanno insieme nel suo cerchio dorato.</div>' +
+      '<div>\u{1F517} Gli altri compaiono solo se li inviti: <b>☰ → Invita amici</b> e manda il link.</div>' +
+      '<div style="margin-top:14px;text-align:center"><span style="display:inline-block;padding:9px 30px;border-radius:22px;background:#2c4a52;color:#fff;font-weight:700;cursor:pointer">Capito</span></div></div>';
+    mount.appendChild(helpEl);
+    const showHelp = () => { helpEl.style.display = "flex"; };
+    helpEl.addEventListener("pointerdown", (e) => { e.stopPropagation(); helpEl.style.display = "none"; });
+    function inviteLink() {
+      const u = new URL(location.href);
+      u.searchParams.set("room", roomName);
+      u.searchParams.delete("test");
+      return u.toString();
+    }
+    async function invite() {
+      const link = inviteLink();
+      try {
+        if (navigator.share) { await navigator.share({ title: "Island", text: "Vieni a esplorare con me!", url: link }); return; }
+      } catch { /* annullato */ }
+      try { await navigator.clipboard.writeText(link); toast("Link copiato! Mandalo a chi vuoi invitare."); }
+      catch { window.prompt("Copia il link e mandalo ai tuoi amici:", link); }
+    }
+    function leaveGame() {
+      net.close();
+      net = { connected: false, send() {}, close() {}, reconnect() {} };
+      netStarted = false;
+      [...remotes.keys()].forEach(removeRemote);
+      netLabel.textContent = "○ offline";
+      splashGone = false;
+      splash.style.display = "flex";
+      splash.style.pointerEvents = "auto";
+      requestAnimationFrame(() => (splash.style.opacity = "1"));
+      barWrap.style.display = "none";
+      enterBtn.style.display = "block";
+      enterBtn.textContent = "TORNA NEL GIOCO";
+    }
+    menuItem("❓ Aiuto", showHelp);
+    menuItem("\u{1F517} Invita amici", invite);
+    menuItem("\u{1F504} Riconnetti", () => { if (net.connected) { toast("Sei gia' online"); return; } netStarted = true; net.reconnect(); toast("Mi riconnetto..."); });
+    menuItem("\u{1F6AA} Esci", leaveGame);
+    netLabel.style.pointerEvents = "auto";
+    netLabel.style.cursor = "pointer";
+    netLabel.addEventListener("pointerdown", (e) => { e.stopPropagation(); if (!net.connected) { net.reconnect(); toast("Mi riconnetto..."); } });
+    let helpSeen = false;
+    try { helpSeen = localStorage.getItem("island_help") === "1"; } catch { /* storage non disponibile */ }
+    let aloneT = 0, aloneToasted = false;
+
     // ---------- Luoghi speciali: si attivano solo se almeno 2 persone sono vicine ----------
     const TEST_PARTNER = new URLSearchParams(location.search).has("test"); // ?test=1 simula un secondo giocatore
     const PLACE_RADIUS = 3.4;
@@ -1666,19 +1893,34 @@ export default function PlanetDemo() {
       const ring = new THREE.Mesh(new THREE.TorusGeometry(PLACE_RADIUS - 0.3, 0.07, 6, 40), new THREE.MeshBasicMaterial({ color: "#ffd35c", transparent: true, opacity: 0.35 }));
       ring.rotation.x = Math.PI / 2; ring.position.y = 0.08;
       g.add(ring);
+      // faro luminoso visibile da lontano + etichetta col nome
+      const beacon = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 16, 8, 1, true), new THREE.MeshBasicMaterial({ color: "#ffd35c", transparent: true, opacity: 0.25, depthWrite: false, side: THREE.DoubleSide }));
+      beacon.position.y = 8;
+      g.add(beacon);
+      const cv = document.createElement("canvas");
+      cv.width = 512; cv.height = 96;
+      const cx2 = cv.getContext("2d");
+      cx2.font = "600 40px system-ui, sans-serif"; cx2.textAlign = "center"; cx2.textBaseline = "middle";
+      cx2.lineWidth = 8; cx2.strokeStyle = "rgba(20,30,35,.85)"; cx2.strokeText("\u2728 " + name, 256, 48);
+      cx2.fillStyle = "#fff"; cx2.fillText("\u2728 " + name, 256, 48);
+      const label = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(cv), transparent: true, depthTest: false }));
+      label.scale.set(5.5, 1.03, 1); label.position.y = 5.2; label.renderOrder = 11;
+      g.add(label);
       const upd = build(g);
-      return { name, group: g, ring, upd, act: 0, wasOn: false, dir: null, count: 1 };
+      return { name, group: g, ring, beacon, label, upd, act: 0, wasOn: false, dir: null, count: 1 };
     }
     const BUILDERS = [
       ["Fontana dei desideri", (g) => {
         const base = new THREE.Mesh(new THREE.CylinderGeometry(1.4, 1.5, 0.55, 20), stoneM); base.position.y = 0.27; g.add(base);
         const pool = new THREE.Mesh(new THREE.CylinderGeometry(1.15, 1.15, 0.08, 20), waterM); pool.position.y = 0.58; g.add(pool);
         const pil = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.3, 1.1, 8), stoneM); pil.position.y = 1.0; g.add(pil);
+        const bowl = new THREE.Mesh(new THREE.CylinderGeometry(0.75, 0.35, 0.3, 14), stoneM); bowl.position.y = 1.6; g.add(bowl);
+        const bowlW = new THREE.Mesh(new THREE.CylinderGeometry(0.62, 0.62, 0.05, 14), waterM); bowlW.position.y = 1.77; g.add(bowlW);
         const drops = [];
         for (let i = 0; i < 16; i++) { const d = new THREE.Mesh(new THREE.SphereGeometry(0.09, 6, 5), glowMat("#bfe9ff")); d.visible = false; g.add(d); drops.push({ m: d, a: (i / 16) * 6.283, ph: (i * 0.37) % 1 }); }
         return (act, t) => {
           pool.material.color.set("#6fc3e8").lerp(new THREE.Color("#c8f0ff"), act);
-          drops.forEach((d) => { const u = (t * 0.8 + d.ph) % 1; const r = 0.15 + u * 1.0; d.m.position.set(Math.cos(d.a) * r, 1.5 + 1.5 * (4 * u * (1 - u)) - u * 0.9, Math.sin(d.a) * r); d.m.scale.setScalar(act); d.m.visible = act > 0.05; });
+          drops.forEach((d) => { const u = (t * 0.8 + d.ph) % 1; const r = 0.15 + u * 1.0; d.m.position.set(Math.cos(d.a) * r, 1.9 + 1.8 * (4 * u * (1 - u)) - u * 1.1, Math.sin(d.a) * r); d.m.scale.setScalar(act); d.m.visible = act > 0.05; });
         };
       }],
       ["Cerchio di pietre", (g) => {
@@ -1693,11 +1935,15 @@ export default function PlanetDemo() {
         return (act, t) => { runes.forEach((r, i) => lerpColor(r.material, "#445566", "#7ff3ff", act * (0.7 + 0.3 * Math.sin(t * 3 + i)))); beam.material.opacity = act * 0.32; beam.scale.set(1 + 0.1 * Math.sin(t * 4), 1, 1 + 0.1 * Math.sin(t * 4)); beam.visible = act > 0.02; };
       }],
       ["Altalena a bilico", (g) => {
-        const piv = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.6, 0.5), woodM); piv.position.y = 0.3; g.add(piv);
-        const plank = new THREE.Group(); plank.position.y = 0.7; g.add(plank);
-        const pl = new THREE.Mesh(new THREE.BoxGeometry(3.4, 0.14, 0.55), mkMat("#c79a5a")); plank.add(pl);
-        [-1, 1].forEach((sd) => { const sp = new THREE.Mesh(new THREE.SphereGeometry(0.22, 8, 6), mkMat(sd < 0 ? "#d9503f" : "#4f86c9")); sp.position.set(sd * 1.5, 0.25, 0); plank.add(sp); });
-        return (act, t) => { plank.rotation.z = Math.sin(t * 2.2) * 0.32 * act; };
+        [-1, 1].forEach((sd) => { const leg = new THREE.Mesh(new THREE.BoxGeometry(0.14, 1.2, 0.14), woodM); leg.position.set(0, 0.55, sd * 0.35); leg.rotation.x = sd * 0.35; g.add(leg); });
+        const axle = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 0.9, 8), mkMat("#3b3a3c")); axle.rotation.x = Math.PI / 2; axle.position.y = 1.0; g.add(axle);
+        const plank = new THREE.Group(); plank.position.y = 1.05; g.add(plank);
+        const pl = new THREE.Mesh(new THREE.BoxGeometry(5.0, 0.18, 0.7), mkMat("#d9a05b")); plank.add(pl);
+        [-1, 1].forEach((sd) => {
+          const seat = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.14, 0.7), mkMat(sd < 0 ? "#d9503f" : "#4f86c9")); seat.position.set(sd * 2.0, 0.16, 0); plank.add(seat);
+          const bar = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.5, 0.6), mkMat("#3b3a3c")); bar.position.set(sd * 1.65, 0.45, 0); plank.add(bar);
+        });
+        return (act, t) => { plank.rotation.z = (0.1 + Math.sin(t * 2.2) * 0.3) * (0.15 + act * 0.85); };
       }],
       ["Lanterne del cielo", (g) => {
         const ls = [];
@@ -1727,13 +1973,28 @@ export default function PlanetDemo() {
     {
       const chosen = [];
       for (const [name, build] of BUILDERS) {
-        for (let attempt = 0; attempt < 600; attempt++) {
+        for (let attempt = 0; attempt < 2500; attempt++) {
           const d = randomDir();
           const h = terrainHeight(d);
-          if (h < SEA_LEVEL + 0.8 || h > 1.3) continue;
+          if (h < SEA_LEVEL + 0.8 || h > 2.2) continue;
           let ok = true;
-          for (let i = 0; i < obstacles.length && ok; i++) if (d.angleTo(obstacles[i].dir) < obstacles[i].r + 6 / PLANET_R) ok = false;
-          for (let i = 0; i < chosen.length && ok; i++) if (d.angleTo(chosen[i].dir) < 0.9) ok = false;
+          for (let i = 0; i < obstacles.length && ok; i++) if (d.angleTo(obstacles[i].dir) < obstacles[i].r + (attempt > 1500 ? 4 : 6) / PLANET_R) ok = false;
+          for (let i = 0; i < chosen.length && ok; i++) if (d.angleTo(chosen[i].dir) < (attempt > 1200 ? 0.6 : 0.9)) ok = false;
+          if (!ok) continue;
+          // solo su terreno pianeggiante: nessuna differenza di quota significativa nel cerchio
+          {
+            const ref = Math.abs(d.y) < 0.9 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
+            const t1 = new THREE.Vector3().crossVectors(ref, d).normalize();
+            const t2 = new THREE.Vector3().crossVectors(d, t1).normalize();
+            let lo = 99, hi = -99;
+            for (let k = 0; k < 8; k++) {
+              const a2 = (k / 8) * 6.283;
+              const q = d.clone().addScaledVector(t1, (Math.cos(a2) * 3.4) / PLANET_R).addScaledVector(t2, (Math.sin(a2) * 3.4) / PLANET_R).normalize();
+              const hh = terrainHeight(q);
+              lo = Math.min(lo, hh); hi = Math.max(hi, hh);
+            }
+            if (hi - lo > 0.6 + attempt * 0.0012) ok = false;
+          }
           if (!ok) continue;
           const pl = newPlace(name, build);
           const surf = getSurfacePoint(d);
@@ -1748,6 +2009,7 @@ export default function PlanetDemo() {
         }
       }
     }
+    if (TEST_PARTNER) window.__info = () => ({ villages: VILLAGES.length, buildings: buildings.length, trees: decor.tree.length, places: places.length });
     if (TEST_PARTNER) window.__tpPlace = (i) => { const pl = places[i]; if (!pl) return places.length; charDir = pl.dir.clone().addScaledVector(facing, -0.02).normalize(); return places.length; };
     const placeHint = document.createElement("div");
     Object.assign(placeHint.style, { position: "absolute", bottom: "34px", left: "50%", transform: "translateX(-50%)", font: "14px system-ui, sans-serif", color: "#fff", background: "rgba(35,40,38,0.55)", padding: "7px 16px", borderRadius: "16px", zIndex: 22, pointerEvents: "none", opacity: "0", transition: "opacity .3s", whiteSpace: "nowrap" });
@@ -1770,11 +2032,24 @@ export default function PlanetDemo() {
         pl.upd(pl.act, t, dt);
         if (!inside && charDir.angleTo(pl.dir) < r2 * 1.6) hint = n >= 2 ? "✨ " + pl.name + " — attivata!" : "✨ " + pl.name + " — serve qualcun altro qui con te";
       }
+      let nearest = null, nearAng = 9;
+      for (const pl of places) {
+        const a = inside ? 9 : charDir.angleTo(pl.dir);
+        pl.beacon.material.opacity = 0.16 + 0.3 * pl.act + 0.06 * Math.sin(t * 2 + pl.dir.x * 9);
+        pl.label.visible = a * PLANET_R < 30;
+        pl.beacon.visible = a * PLANET_R > PLACE_RADIUS + 2;
+        pl.label.material.opacity = Math.min(1, Math.max(0.15, 1.4 - (a * PLANET_R) / 22));
+        if (a < nearAng) { nearAng = a; nearest = pl; }
+      }
+      nearLabel.style.display = inside || !nearest ? "none" : "block";
+      if (nearest && !inside) nearLabel.textContent = "\u25C6 " + nearest.name + " \u00B7 " + Math.round(nearAng * PLANET_R) + " m";
+      if (net.connected && playersOnline <= 1 && !inside) { aloneT += dt; if (aloneT > 30 && !aloneToasted) { aloneToasted = true; toast("Sei da solo nel mondo. \u2630 \u2192 Invita amici per giocare insieme e attivare i luoghi speciali."); } }
       placeHint.textContent = hint || placeHint.textContent;
       placeHint.style.opacity = hint ? "1" : "0";
     }
 
     // ---------- Animation loop ----------
+    let lookSmX = 0, lookSmY = 0;
     let curSpeed = 0; // 0..1 velocita' corrente (accelerazione morbida)
     const lastMoveDir = new THREE.Vector3();
     let stepAcc = 0;
@@ -1811,7 +2086,7 @@ export default function PlanetDemo() {
       const centerDir = b.pos.clone().normalize();
       const out = b.exitDir.clone().sub(centerDir);
       out.addScaledVector(b.exitDir, -out.dot(b.exitDir)).normalize();
-      inside = { room, returnDir: b.exitDir.clone(), returnFacing: out };
+      inside = { room, returnDir: b.exitDir.clone(), returnFacing: out, bIdx: buildings.indexOf(b) };
       audio.enter();
       inPos.set(0, 0, -room.D / 2 + 1.4);
       inHeading.set(0, 0, 1);
@@ -2002,8 +2277,12 @@ export default function PlanetDemo() {
       if (keys.right) lookX += 1;
       if (keys.up) lookY -= 1;
       if (keys.down) lookY += 1;
-      if (Math.abs(lookX) > 0.03) facing.applyAxisAngle(charDir, -lookX * 2.2 * dt);
-      camPitch = Math.max(0.15, Math.min(1.2, camPitch + lookY * 1.6 * dt));
+      // risposta curva + smorzata: piccoli movimenti = rotazione lenta, niente giramenti di testa
+      const curve = (v) => Math.sign(v) * Math.pow(Math.abs(v), 1.8);
+      lookSmX += (curve(lookX) - lookSmX) * Math.min(1, dt * 7);
+      lookSmY += (curve(lookY) - lookSmY) * Math.min(1, dt * 7);
+      if (Math.abs(lookSmX) > 0.02) facing.applyAxisAngle(charDir, -lookSmX * 1.4 * dt);
+      camPitch = Math.max(0.15, Math.min(1.2, camPitch + lookSmY * 0.9 * dt));
       const right = new THREE.Vector3().crossVectors(facing, charDir).normalize();
 
       let mx = moveJoy.dx;
@@ -2168,7 +2447,7 @@ export default function PlanetDemo() {
       mount.removeChild(audioPanel);
       mount.removeChild(mapCanvas);
       mount.removeChild(netLabel);
-      mount.removeChild(placeHint);
+      [placeHint, nearLabel, toastEl, menuBtn, menuPanel, helpEl, mapBackdrop].forEach((el) => el.parentNode && el.parentNode.removeChild(el));
       mount.removeChild(greetBtn);
       window.removeEventListener("keydown", onGreetKey);
       disposed = true;

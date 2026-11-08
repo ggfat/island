@@ -5,6 +5,7 @@ export function connectRelay({ url, onHello, onState, onWave, onLeave, onStatus 
     connected: false,
     send(obj) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj)); },
     close() { closed = true; clearTimeout(timer); if (ws) ws.close(); },
+    reconnect() { if (ws && ws.readyState <= 1) return; closed = false; retry = 0; clearTimeout(timer); open(); },
   };
   function open() {
     if (closed) return;

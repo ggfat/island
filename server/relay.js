@@ -48,6 +48,10 @@ wss.on("connection", (ws, req) => {
       me.j = num(msg.j) ? Math.max(0, Math.min(10, msg.j)) : 0;
       me.m = msg.m ? 1 : 0;
       me.i = msg.i ? 1 : 0;
+      me.b = Number.isInteger(msg.b) && msg.b >= 0 && msg.b < 200 ? msg.b : -1;
+      me.rx = num(msg.rx) ? Math.max(-30, Math.min(30, msg.rx)) : 0;
+      me.rz = num(msg.rz) ? Math.max(-30, Math.min(30, msg.rz)) : 0;
+      me.rh = num(msg.rh) ? msg.rh : 0;
     } else if (msg.t === "wave") {
       if (process.env.DEBUG) console.log("wave da", id);
       room.players.forEach((p) => p.id !== id && send(p.ws, { t: "wave", id }));
@@ -66,7 +70,7 @@ setInterval(() => {
   rooms.forEach((room) => {
     room.players.forEach((p) => { if (now - p.seen > STALE_MS) p.ws.terminate(); });
     const list = [];
-    room.players.forEach((p) => p.d && list.push({ id: p.id, c: p.c, d: p.d, f: p.f, j: p.j, m: p.m, i: p.i }));
+    room.players.forEach((p) => p.d && list.push({ id: p.id, c: p.c, d: p.d, f: p.f, j: p.j, m: p.m, i: p.i, b: p.b, rx: p.rx, rz: p.rz, rh: p.rh }));
     room.players.forEach((p) => send(p.ws, { t: "state", n: room.players.size, p: list.filter((q) => q.id !== p.id) }));
   });
 }, TICK_MS);
