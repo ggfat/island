@@ -105,3 +105,8 @@ npm run dev -- --host    # gioco; aprilo in due schede o da telefono sulla stess
 - Server remoto: `VITE_RELAY_URL=wss://tuodominio.it/relay npm run build` (nginx con proxy WebSocket davanti al relay).
 - `ALLOWED_ORIGIN=https://tuodominio.it` limita le origini ammesse.
 - Tasto **G** o pulsante 👋 per salutare.
+
+## Luoghi speciali
+
+Sul pianeta ci sono 6 luoghi (segnati con un rombo giallo sulla minimappa) che si attivano solo se **almeno 2 persone** stanno nel cerchio: fontana, cerchio di pietre, altalena, lanterne del cielo, prato fiorito, campane del vento.
+Per provarli da solo: apri il gioco con `?test=1` (simula un secondo giocatore).

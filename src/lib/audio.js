@@ -115,6 +115,8 @@ export function createAudio() {
     },
     jump() { burst(0.12, 900, 0.07, "bandpass"); tone(300, 520, 0.12, 0.04); },
     land(power = 1) { burst(0.14, 380, 0.16 * power); tone(90, 50, 0.14, 0.12 * power, "sine"); },
+    place() { [72, 76, 79, 84].forEach((m, i) => tone(mtof(m), mtof(m), 1.8, 0.07, "triangle", i * 0.14, "sfx", 0.02, true)); },
+    chime(i) { const m = 72 + [0, 2, 4, 7, 9][i % 5] + (i > 4 ? 12 : 0); tone(mtof(m), mtof(m), 2.0, 0.05, "sine", 0, "sfx", 0.005, true); },
     click() { tone(660, 880, 0.07, 0.07, "triangle"); },
     enter() { tone(392, 523, 0.14, 0.08, "triangle"); tone(523, 659, 0.16, 0.07, "triangle", 0.1); },
     exit() { tone(523, 392, 0.14, 0.08, "triangle"); tone(392, 294, 0.16, 0.07, "triangle", 0.1); },

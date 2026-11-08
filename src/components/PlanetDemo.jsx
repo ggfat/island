@@ -69,12 +69,12 @@ function seaMask(dir) {
 function terrainHeight(dir) {
   const noise = noiseAt(dir);
   const mask = seaMask(dir);
-  const landH = noise * 0.7 + 1.0; // real hills/mountains, always comfortably above sea level
+  const landH = noise * 0.55 + 1.0; // real hills/mountains, always comfortably above sea level
   const seaH = noise * 0.3 - 2.2; // genuinely deep water inside the two sea regions
   return landH * (1 - mask) + seaH * mask;
 }
 
-const PLANET_R = 68;
+const PLANET_R = 40; // ~un terzo della superficie di prima (era 68)
 const SEA_LEVEL = -0.5; // verified empirically: land never dips this low outside the two sea regions
 
 function makeToonGradient() {
@@ -270,7 +270,7 @@ export default function PlanetDemo() {
     const rockMat = new THREE.MeshToonMaterial({ color: PALETTE.rock, gradientMap });
     const bushMat = new THREE.MeshToonMaterial({ color: "#5f7a4f", gradientMap });
     const decor = { tree: [], bush: [], rock: [] };
-    for (let i = 0; i < 380; i++) {
+    for (let i = 0; i < 150; i++) {
       const d = randomDir();
       const h = terrainHeight(d);
       if (h < SEA_LEVEL + 0.05) continue; // keep the beaches clear
@@ -619,7 +619,7 @@ export default function PlanetDemo() {
     }
 
     // the rest of the town, spread over the dry land
-    const SCATTERED_BUILDING_COUNT = 28;
+    const SCATTERED_BUILDING_COUNT = 10;
     let scatteredBuilt = 0;
     let scatterAttempts = 0;
     while (scatteredBuilt < SCATTERED_BUILDING_COUNT && scatterAttempts < 5000) {
@@ -1395,7 +1395,7 @@ export default function PlanetDemo() {
     enterBtn.addEventListener("pointerdown", (e) => { e.stopPropagation(); closeSplash(); });
 
     // ---------- Minimappa (proiezione azimutale centrata su di te, "avanti" = su) ----------
-    const MAP_PX = 112, MAP_RES = 36, MAP_ANG = 1.25;
+    const MAP_PX = 112, MAP_RES = 36, MAP_ANG = 1.5;
     const mapCanvas = document.createElement("canvas");
     mapCanvas.width = MAP_PX; mapCanvas.height = MAP_PX;
     Object.assign(mapCanvas.style, { position: "absolute", top: "12px", left: "12px", width: MAP_PX + "px", height: MAP_PX + "px", borderRadius: "50%", border: "3px solid rgba(255,255,255,.75)", background: "#123", zIndex: 22, pointerEvents: "none", boxShadow: "0 2px 10px rgba(0,0,0,.3)" });
@@ -1446,6 +1446,17 @@ export default function PlanetDemo() {
         const rr = (ang / MAP_ANG) * Rm;
         mctx.fillStyle = "#d9503f";
         mctx.fillRect(Rm + (mpT.dot(mpR) / tl) * rr - 2, Rm - (mpT.dot(facing) / tl) * rr - 2, 4, 4);
+      }
+      for (let i = 0; i < places.length; i++) {
+        mpD.copy(places[i].dir);
+        const dp = mpD.dot(charDir), ang = Math.acos(Math.min(1, Math.max(-1, dp)));
+        if (ang > MAP_ANG * 0.97) continue;
+        mpT.copy(mpD).addScaledVector(charDir, -dp);
+        const tl = mpT.length();
+        if (tl < 1e-5) continue;
+        const rr = (ang / MAP_ANG) * Rm, cx = Rm + (mpT.dot(mpR) / tl) * rr, cy = Rm - (mpT.dot(facing) / tl) * rr;
+        mctx.fillStyle = places[i].act > 0.5 ? "#ffffff" : "#ffd35c"; mctx.strokeStyle = "#7a5a00"; mctx.lineWidth = 1;
+        mctx.beginPath(); mctx.moveTo(cx, cy - 5); mctx.lineTo(cx + 4, cy); mctx.lineTo(cx, cy + 5); mctx.lineTo(cx - 4, cy); mctx.closePath(); mctx.fill(); mctx.stroke();
       }
       mctx.fillStyle = "#fff"; mctx.strokeStyle = "#222"; mctx.lineWidth = 1.5;
       mctx.beginPath(); mctx.moveTo(Rm, Rm - 6); mctx.lineTo(Rm + 5, Rm + 5); mctx.lineTo(Rm - 5, Rm + 5); mctx.closePath(); mctx.fill(); mctx.stroke();
@@ -1642,6 +1653,127 @@ export default function PlanetDemo() {
     const onGreetKey = (e) => { if (e.key === "g" || e.key === "G") doGreet(); };
     window.addEventListener("keydown", onGreetKey);
 
+    // ---------- Luoghi speciali: si attivano solo se almeno 2 persone sono vicine ----------
+    const TEST_PARTNER = new URLSearchParams(location.search).has("test"); // ?test=1 simula un secondo giocatore
+    const PLACE_RADIUS = 3.4;
+    const places = [];
+    const mkMat = (c) => new THREE.MeshToonMaterial({ color: c, gradientMap });
+    const glowMat = (c) => new THREE.MeshBasicMaterial({ color: c });
+    const stoneM = mkMat("#8a8782"), woodM = mkMat("#7a5636"), waterM = new THREE.MeshBasicMaterial({ color: "#6fc3e8", transparent: true, opacity: 0.8 });
+    const lerpColor = (m, c1, c2, k) => m.color.set(c1).lerp(new THREE.Color(c2), k);
+    function newPlace(name, build) {
+      const g = new THREE.Group();
+      const ring = new THREE.Mesh(new THREE.TorusGeometry(PLACE_RADIUS - 0.3, 0.07, 6, 40), new THREE.MeshBasicMaterial({ color: "#ffd35c", transparent: true, opacity: 0.35 }));
+      ring.rotation.x = Math.PI / 2; ring.position.y = 0.08;
+      g.add(ring);
+      const upd = build(g);
+      return { name, group: g, ring, upd, act: 0, wasOn: false, dir: null, count: 1 };
+    }
+    const BUILDERS = [
+      ["Fontana dei desideri", (g) => {
+        const base = new THREE.Mesh(new THREE.CylinderGeometry(1.4, 1.5, 0.55, 20), stoneM); base.position.y = 0.27; g.add(base);
+        const pool = new THREE.Mesh(new THREE.CylinderGeometry(1.15, 1.15, 0.08, 20), waterM); pool.position.y = 0.58; g.add(pool);
+        const pil = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.3, 1.1, 8), stoneM); pil.position.y = 1.0; g.add(pil);
+        const drops = [];
+        for (let i = 0; i < 16; i++) { const d = new THREE.Mesh(new THREE.SphereGeometry(0.09, 6, 5), glowMat("#bfe9ff")); d.visible = false; g.add(d); drops.push({ m: d, a: (i / 16) * 6.283, ph: (i * 0.37) % 1 }); }
+        return (act, t) => {
+          pool.material.color.set("#6fc3e8").lerp(new THREE.Color("#c8f0ff"), act);
+          drops.forEach((d) => { const u = (t * 0.8 + d.ph) % 1; const r = 0.15 + u * 1.0; d.m.position.set(Math.cos(d.a) * r, 1.5 + 1.5 * (4 * u * (1 - u)) - u * 0.9, Math.sin(d.a) * r); d.m.scale.setScalar(act); d.m.visible = act > 0.05; });
+        };
+      }],
+      ["Cerchio di pietre", (g) => {
+        const runes = [];
+        for (let i = 0; i < 7; i++) {
+          const a = (i / 7) * 6.283, st = new THREE.Mesh(new THREE.BoxGeometry(0.55, 1.9 + (i % 3) * 0.3, 0.4), stoneM);
+          st.position.set(Math.cos(a) * 2.2, 0.9, Math.sin(a) * 2.2); st.rotation.y = -a; g.add(st);
+          const rn = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.5, 0.05), glowMat("#445566")); rn.position.set(0, 0.2, 0.22); st.add(rn); runes.push(rn);
+        }
+        const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.7, 0.7, 16, 16, 1, true), new THREE.MeshBasicMaterial({ color: "#8fe8ff", transparent: true, opacity: 0, side: THREE.DoubleSide, depthWrite: false }));
+        beam.position.y = 8; g.add(beam);
+        return (act, t) => { runes.forEach((r, i) => lerpColor(r.material, "#445566", "#7ff3ff", act * (0.7 + 0.3 * Math.sin(t * 3 + i)))); beam.material.opacity = act * 0.32; beam.scale.set(1 + 0.1 * Math.sin(t * 4), 1, 1 + 0.1 * Math.sin(t * 4)); beam.visible = act > 0.02; };
+      }],
+      ["Altalena a bilico", (g) => {
+        const piv = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.6, 0.5), woodM); piv.position.y = 0.3; g.add(piv);
+        const plank = new THREE.Group(); plank.position.y = 0.7; g.add(plank);
+        const pl = new THREE.Mesh(new THREE.BoxGeometry(3.4, 0.14, 0.55), mkMat("#c79a5a")); plank.add(pl);
+        [-1, 1].forEach((sd) => { const sp = new THREE.Mesh(new THREE.SphereGeometry(0.22, 8, 6), mkMat(sd < 0 ? "#d9503f" : "#4f86c9")); sp.position.set(sd * 1.5, 0.25, 0); plank.add(sp); });
+        return (act, t) => { plank.rotation.z = Math.sin(t * 2.2) * 0.32 * act; };
+      }],
+      ["Lanterne del cielo", (g) => {
+        const ls = [];
+        for (let i = 0; i < 9; i++) { const l = new THREE.Mesh(new THREE.SphereGeometry(0.22, 8, 6), glowMat("#ffb347")); const a = (i / 9) * 6.283; l.userData = { a, r: 0.8 + (i % 3) * 0.5, ph: i * 0.9 }; g.add(l); ls.push(l); }
+        const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.1, 1.4, 6), woodM); pole.position.y = 0.7; g.add(pole);
+        return (act, t) => ls.forEach((l, i) => { const u = l.userData; l.position.set(Math.cos(u.a + t * 0.2 * act) * u.r, 0.4 + act * (3 + i * 0.9) + Math.sin(t * 1.5 + u.ph) * 0.15, Math.sin(u.a + t * 0.2 * act) * u.r); l.scale.setScalar(0.7 + act * 0.5); });
+      }],
+      ["Prato fiorito", (g) => {
+        const fl = [], cols = ["#ff7aa8", "#ffd35c", "#ffffff", "#b58cff", "#ff9a5c"];
+        for (let i = 0; i < 28; i++) {
+          const a = i * 2.4, r = 0.4 + Math.sqrt(i / 28) * 2.3, f = new THREE.Group();
+          const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.03, 0.7, 5), mkMat("#4f8a4a")); stem.position.y = 0.35; f.add(stem);
+          const head = new THREE.Mesh(new THREE.SphereGeometry(0.15, 8, 6), mkMat(cols[i % 5])); head.position.y = 0.75; f.add(head);
+          f.position.set(Math.cos(a) * r, 0, Math.sin(a) * r); g.add(f); fl.push(f);
+        }
+        return (act, t) => fl.forEach((f, i) => { const k = Math.max(0.12, act); f.scale.set(k, 0.15 + 1.0 * act + 0.08 * Math.sin(t * 2 + i) * act, k); });
+      }],
+      ["Campane del vento", (g) => {
+        const frame = new THREE.Mesh(new THREE.BoxGeometry(3.2, 0.14, 0.14), woodM); frame.position.y = 2.6; g.add(frame);
+        [-1.5, 1.5].forEach((x) => { const lg = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.09, 2.6, 6), woodM); lg.position.set(x, 1.3, 0); g.add(lg); });
+        const bells = [];
+        for (let i = 0; i < 5; i++) { const piv = new THREE.Group(); piv.position.set(-1.2 + i * 0.6, 2.55, 0); const b = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.17, 0.5 + i * 0.12, 8), mkMat("#d4af37")); b.position.y = -0.55 - i * 0.06; piv.add(b); g.add(piv); bells.push(piv); }
+        let timer = 0, idx = 0;
+        return (act, t, dt) => { bells.forEach((b, i) => { b.rotation.z = Math.sin(t * 2.4 + i * 1.3) * 0.35 * act; }); if (act > 0.6) { timer -= dt; if (timer <= 0) { timer = 0.55 + Math.random() * 0.5; audio.chime(idx++ + Math.floor(Math.random() * 3)); } } };
+      }],
+    ];
+    {
+      const chosen = [];
+      for (const [name, build] of BUILDERS) {
+        for (let attempt = 0; attempt < 600; attempt++) {
+          const d = randomDir();
+          const h = terrainHeight(d);
+          if (h < SEA_LEVEL + 0.8 || h > 1.3) continue;
+          let ok = true;
+          for (let i = 0; i < obstacles.length && ok; i++) if (d.angleTo(obstacles[i].dir) < obstacles[i].r + 6 / PLANET_R) ok = false;
+          for (let i = 0; i < chosen.length && ok; i++) if (d.angleTo(chosen[i].dir) < 0.9) ok = false;
+          if (!ok) continue;
+          const pl = newPlace(name, build);
+          const surf = getSurfacePoint(d);
+          pl.dir = d.clone();
+          pl.group.position.copy(surf.point);
+          pl.group.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), surf.normal);
+          scene.add(pl.group);
+          obstacles.push({ dir: d.clone(), r: (name === "Fontana dei desideri" ? 1.7 : 0.9) / PLANET_R });
+          chosen.push(pl);
+          places.push(pl);
+          break;
+        }
+      }
+    }
+    if (TEST_PARTNER) window.__tpPlace = (i) => { const pl = places[i]; if (!pl) return places.length; charDir = pl.dir.clone().addScaledVector(facing, -0.02).normalize(); return places.length; };
+    const placeHint = document.createElement("div");
+    Object.assign(placeHint.style, { position: "absolute", bottom: "34px", left: "50%", transform: "translateX(-50%)", font: "14px system-ui, sans-serif", color: "#fff", background: "rgba(35,40,38,0.55)", padding: "7px 16px", borderRadius: "16px", zIndex: 22, pointerEvents: "none", opacity: "0", transition: "opacity .3s", whiteSpace: "nowrap" });
+    mount.appendChild(placeHint);
+    function updatePlaces(dt, t) {
+      let hint = "";
+      for (const pl of places) {
+        let n = 0;
+        const r2 = PLACE_RADIUS / PLANET_R;
+        if (!inside && charDir.angleTo(pl.dir) < r2) n++;
+        remotes.forEach((r) => { if (r.curDir && !r.inside && r.curDir.angleTo(pl.dir) < r2) n++; });
+        if (TEST_PARTNER && n >= 1) n++;
+        pl.count = n;
+        const on = n >= 2;
+        pl.act += ((on ? 1 : 0) - pl.act) * Math.min(1, dt * 2.5);
+        if (on && !pl.wasOn) audio.place();
+        pl.wasOn = on;
+        pl.ring.material.opacity = 0.3 + 0.5 * pl.act + (n === 1 ? 0.15 * Math.sin(t * 5) : 0);
+        pl.ring.material.color.set("#ffd35c").lerp(new THREE.Color("#ffffff"), pl.act);
+        pl.upd(pl.act, t, dt);
+        if (!inside && charDir.angleTo(pl.dir) < r2 * 1.6) hint = n >= 2 ? "✨ " + pl.name + " — attivata!" : "✨ " + pl.name + " — serve qualcun altro qui con te";
+      }
+      placeHint.textContent = hint || placeHint.textContent;
+      placeHint.style.opacity = hint ? "1" : "0";
+    }
+
     // ---------- Animation loop ----------
     let curSpeed = 0; // 0..1 velocita' corrente (accelerazione morbida)
     const lastMoveDir = new THREE.Vector3();
@@ -1729,8 +1861,8 @@ export default function PlanetDemo() {
       const duskFactor = Math.max(0, 1 - Math.abs(sunHeight - 0.05) * 4);
       sun.intensity = 0.03 + dayFactor * 1.1;
       sun.color.set("#7a8ab0").lerp(dayColorTmp.set("#fff3da"), dayFactor).lerp(duskColorTmp.set("#ff9a5c"), duskFactor * 0.55);
-      hemi.intensity = 0.55 + dayFactor * 0.55;
-      hemi.color.set("#4a5578").lerp(dayColorTmp.set("#dfe8e6"), dayFactor);
+      hemi.intensity = 0.85 + dayFactor * 0.25;
+      hemi.color.set("#7886b8").lerp(dayColorTmp.set("#dfe8e6"), dayFactor);
       skyMat.color.set("#3a4568").lerp(dayColorTmp.set("#ffffff"), dayFactor).lerp(duskColorTmp.set("#ffb27a"), duskFactor * 0.45);
       scene.fog.color.copy(skyMat.color);
 
@@ -1969,6 +2101,7 @@ export default function PlanetDemo() {
       updateMinimap(dt);
       lastMoving = moving;
       updateRemotes(dt);
+      updatePlaces(dt, t);
       sendNet(dt);
       {
         const h = terrainHeight(charDir);
@@ -2035,6 +2168,7 @@ export default function PlanetDemo() {
       mount.removeChild(audioPanel);
       mount.removeChild(mapCanvas);
       mount.removeChild(netLabel);
+      mount.removeChild(placeHint);
       mount.removeChild(greetBtn);
       window.removeEventListener("keydown", onGreetKey);
       disposed = true;
