@@ -94,6 +94,11 @@ export default function PlanetDemo() {
   const [hint, setHint] = useState(true);
 
   useEffect(() => {
+    const loadStat = { pending: 0, done: 0 };
+    const loadModelT = (pth) => {
+      loadStat.pending++;
+      return Promise.resolve(loadModel(pth)).finally(() => loadStat.done++);
+    };
     const mount = mountRef.current;
     const width = mount.clientWidth;
     const height = mount.clientHeight;
@@ -336,7 +341,7 @@ export default function PlanetDemo() {
 
     // ---------- Real models (trees, rocks, bushes) swapped in once loaded; stand-ins stay as fallback ----------
     function swapInReal(kind, paths) {
-      Promise.all(paths.map((pth) => loadModel(pth))).then((models) => {
+      Promise.all(paths.map((pth) => loadModelT(pth))).then((models) => {
         const variants = models.filter(Boolean);
         if (variants.length === 0 || decor[kind].length === 0) return;
         const realMeshes = [];
@@ -636,7 +641,7 @@ export default function PlanetDemo() {
     // ---------- Real houses (Pirate kit), swapped in once loaded; the stand-ins stay as fallback ----------
     // The foundation under each house stays visible in both cases.
     const HOUSE_PATHS = ["/models/buildings/Environment_House1.gltf", "/models/buildings/Environment_House2.gltf", "/models/buildings/Environment_House3.gltf"];
-    Promise.all(HOUSE_PATHS.map((pth) => loadModel(pth))).then((models) => {
+    Promise.all(HOUSE_PATHS.map((pth) => loadModelT(pth))).then((models) => {
       const realMeshes = [];
       const standIns = [];
       models.forEach((gltf, typeIdx) => {
@@ -833,7 +838,7 @@ export default function PlanetDemo() {
       else if (moving) setAnimAction(walkAction ?? idleAction);
       else setAnimAction(idleAction);
     }
-    loadModel("/models/characters/Characters_Anne.gltf").then((gltf) => {
+    loadModelT("/models/characters/Characters_Anne.gltf").then((gltf) => {
       if (!gltf) return;
       const model = gltf.scene;
       const sc = 1.7 / (1.81 * 1.15);
@@ -906,7 +911,24 @@ export default function PlanetDemo() {
     const rBlue = new THREE.MeshToonMaterial({ color: "#5a8fc4", gradientMap });
     const rGold = new THREE.MeshToonMaterial({ color: "#d4af37", gradientMap });
     const rooms = {};
+    // Ogni tipo di casa ha il suo interno: grande = taverna, piccola (torre) = studio, media (nave) = cabina.
+    const THEMES = {
+      large: { wall: "#b08a5c", floor: "#6b4a2e", win: "#e8b86a" },
+      small: { wall: "#8b93b5", floor: "#4f4866", win: "#9ec7e8" },
+      medium: { wall: "#4f7f8c", floor: "#7a5a3a", win: "#bfe3f0" },
+    };
+    const rStone = new THREE.MeshToonMaterial({ color: "#6d6a68", gradientMap });
+    const rFire = new THREE.MeshBasicMaterial({ color: "#ff9a3c" });
+    const rGreen = new THREE.MeshToonMaterial({ color: "#4f8a5a", gradientMap });
+    const rRed = new THREE.MeshToonMaterial({ color: "#b8483f", gradientMap });
+    const rMap = new THREE.MeshToonMaterial({ color: "#e6d8a8", gradientMap });
+    const rNavy = new THREE.MeshToonMaterial({ color: "#2f4a63", gradientMap });
+    const rIron = new THREE.MeshToonMaterial({ color: "#4a4a50", gradientMap });
     Object.entries(ROOM_SPECS).forEach(([key, { W, D, H }]) => {
+      const th = THEMES[key];
+      const wallM = new THREE.MeshToonMaterial({ color: th.wall, gradientMap });
+      const floorM = new THREE.MeshToonMaterial({ color: th.floor, gradientMap });
+      const winM = new THREE.MeshBasicMaterial({ color: th.win });
       const g = new THREE.Group();
       g.visible = false;
       const add = (geo, mat, x, y, z) => {
@@ -915,49 +937,107 @@ export default function PlanetDemo() {
         g.add(m);
         return m;
       };
+      const box = (w, h, d, mat, x, y, z) => add(new THREE.BoxGeometry(w, h, d), mat, x, y, z);
+      const cyl = (r, h, mat, x, y, z, seg = 12) => add(new THREE.CylinderGeometry(r, r, h, seg), mat, x, y, z);
       const colliders = [];
-      add(new THREE.BoxGeometry(W + 0.4, 0.3, D + 0.4), rFloor, 0, -0.15, 0);
-      add(new THREE.BoxGeometry(W + 0.4, H, 0.2), rWall, 0, H / 2, -D / 2 - 0.1);
-      add(new THREE.BoxGeometry(0.2, H, D + 0.4), rWall, -W / 2 - 0.1, H / 2, 0);
-      add(new THREE.BoxGeometry(0.2, H, D + 0.4), rWall, W / 2 + 0.1, H / 2, 0);
-      // exit door on the back wall
-      add(new THREE.BoxGeometry(1.3, DOOR_H + 0.12, 0.12), rDark, 0, (DOOR_H + 0.12) / 2, -D / 2 + 0.02);
-      add(new THREE.BoxGeometry(1.0, DOOR_H, 0.14), rWood, 0, DOOR_H / 2, -D / 2 + 0.05);
-      add(new THREE.BoxGeometry(1.2, 0.03, 0.7), rRug, 0, 0.02, -D / 2 + 0.55);
-      // windows on the side walls
-      [-1, 1].forEach((sd) => add(new THREE.BoxGeometry(0.06, 0.9, 1.1), rBlue, sd * (W / 2 - 0.02), H * 0.6, -D * 0.12));
-      // rug
-      add(new THREE.BoxGeometry(2.4, 0.03, 1.7), rRug, 0, 0.02, D * 0.12);
-      // table + stools + lamp
-      const tx = W * 0.16;
-      const tz = D * 0.1;
-      add(new THREE.BoxGeometry(1.3, 0.08, 0.8), rWood, tx, 0.78, tz);
-      [[-0.55, -0.32], [0.55, -0.32], [-0.55, 0.32], [0.55, 0.32]].forEach(([lx, lz]) => add(new THREE.BoxGeometry(0.08, 0.75, 0.08), rWood, tx + lx, 0.38, tz + lz));
-      add(new THREE.SphereGeometry(0.11, 10, 8), rGold, tx, 0.97, tz);
-      colliders.push({ x: tx, z: tz, r: 0.85 });
-      [-0.95, 0.95].forEach((o) => {
-        add(new THREE.BoxGeometry(0.4, 0.45, 0.4), rWood, tx + o, 0.22, tz + 0.05);
-        colliders.push({ x: tx + o, z: tz + 0.05, r: 0.34 });
-      });
-      // bed, back-left corner
-      const bx = -W / 2 + 0.75;
-      const bz = -D / 2 + 1.35;
-      add(new THREE.BoxGeometry(1.1, 0.45, 2.1), rWood, bx, 0.22, bz);
-      add(new THREE.BoxGeometry(1.0, 0.18, 1.7), rCloth, bx, 0.52, bz + 0.15);
-      add(new THREE.BoxGeometry(0.8, 0.16, 0.38), rCloth, bx, 0.66, bz - 0.8);
-      colliders.push({ x: bx, z: bz - 0.5, r: 0.8 }, { x: bx, z: bz + 0.5, r: 0.8 });
-      // shelf on the right wall, with a few books
-      const sx = W / 2 - 0.3;
-      const sz = -D * 0.05;
-      add(new THREE.BoxGeometry(0.4, 2.0, 1.6), rWood, sx, 1.0, sz);
-      [rRug, rBlue, rGold, rCloth, rBlue].forEach((m, i) => add(new THREE.BoxGeometry(0.28, 0.3, 0.18), m, sx - 0.05, 0.55 + Math.floor(i / 3) * 0.7, sz - 0.5 + (i % 3) * 0.5));
-      colliders.push({ x: sx, z: sz - 0.5, r: 0.7 }, { x: sx, z: sz + 0.5, r: 0.7 });
-      // chest
-      const cx = W / 2 - 0.65;
-      const cz = D * 0.3;
-      add(new THREE.BoxGeometry(0.9, 0.5, 0.55), rWood, cx, 0.25, cz);
-      add(new THREE.BoxGeometry(0.94, 0.08, 0.59), rGold, cx, 0.52, cz);
-      colliders.push({ x: cx, z: cz, r: 0.6 });
+      const col = (x, z, r) => colliders.push({ x, z, r });
+      const table = (tx, tz, r) => {
+        cyl(r, 0.08, rWood, tx, 0.78, tz, 16);
+        cyl(0.09, 0.75, rWood, tx, 0.38, tz, 8);
+        col(tx, tz, r + 0.05);
+      };
+      const stool = (x, z) => { cyl(0.22, 0.45, rWood, x, 0.22, z, 10); col(x, z, 0.26); };
+      const barrel = (x, z) => { cyl(0.38, 0.85, rWood, x, 0.42, z, 12); cyl(0.39, 0.06, rDark, x, 0.25, z, 12); cyl(0.39, 0.06, rDark, x, 0.62, z, 12); col(x, z, 0.42); };
+      const chest = (x, z) => { box(0.9, 0.5, 0.55, rWood, x, 0.25, z); box(0.94, 0.08, 0.59, rGold, x, 0.52, z); col(x, z, 0.6); };
+
+      // guscio comune: pavimento, pareti, porta d'uscita sul fondo
+      box(W + 0.4, 0.3, D + 0.4, floorM, 0, -0.15, 0);
+      box(W + 0.4, H, 0.2, wallM, 0, H / 2, -D / 2 - 0.1);
+      box(0.2, H, D + 0.4, wallM, -W / 2 - 0.1, H / 2, 0);
+      box(0.2, H, D + 0.4, wallM, W / 2 + 0.1, H / 2, 0);
+      box(1.3, DOOR_H + 0.12, 0.12, rDark, 0, (DOOR_H + 0.12) / 2, -D / 2 + 0.02);
+      box(1.0, DOOR_H, 0.14, rWood, 0, DOOR_H / 2, -D / 2 + 0.05);
+      box(1.2, 0.03, 0.7, rRug, 0, 0.02, -D / 2 + 0.55);
+
+      if (key === "large") {
+        // TAVERNA: bancone, botti, camino, tavoli rotondi con sgabelli, tappeto lungo
+        [-1, 1].forEach((sd) => box(0.06, 1.0, 1.3, winM, sd * (W / 2 - 0.02), H * 0.6, D * 0.25));
+        box(1.6, 0.03, 4.6, rRug, 0, 0.02, 0.5);
+        box(0.8, 1.05, 4.4, rWood, W / 2 - 1.1, 0.52, -0.2);
+        box(0.95, 0.08, 4.55, rDark, W / 2 - 1.1, 1.08, -0.2);
+        for (let i = 0; i < 4; i++) col(W / 2 - 1.1, -2.1 + i * 1.3, 0.7);
+        [-1.7, -0.5, 0.7, 1.9].forEach((z, i) => { barrel(W / 2 - 0.5, z - 0.2 + (i % 2) * 0.1); });
+        box(3.2, 0.1, 0.3, rWood, W / 2 - 0.3, 2.2, -0.2);
+        [-1, 0, 1].forEach((o) => cyl(0.12, 0.3, rGold, W / 2 - 0.35, 2.4, -0.2 + o * 1.0, 8));
+        // camino
+        box(0.6, 1.7, 2.0, rStone, -W / 2 + 0.35, 0.85, -D * 0.12);
+        box(0.12, 0.7, 1.1, rFire, -W / 2 + 0.68, 0.4, -D * 0.12);
+        box(0.7, 0.15, 2.2, rDark, -W / 2 + 0.35, 1.75, -D * 0.12);
+        col(-W / 2 + 0.5, -D * 0.12 - 0.6, 0.8); col(-W / 2 + 0.5, -D * 0.12 + 0.6, 0.8);
+        // tavoli
+        [[-2.2, 1.0], [-2.2, -1.4], [0.6, 2.2]].forEach(([tx, tz]) => {
+          table(tx, tz, 0.75);
+          [0, 2.1, 4.2].forEach((a) => stool(tx + Math.cos(a) * 1.1, tz + Math.sin(a) * 1.1));
+        });
+        // lanterne appese
+        [[-2.2, 0], [1.2, 1.0]].forEach(([x, z]) => { cyl(0.02, 0.8, rDark, x, H - 0.4, z, 4); cyl(0.17, 0.3, rFire, x, H - 0.95, z, 8); });
+      } else if (key === "small") {
+        // STUDIO DEL TORRIONE: librerie, scrivania con mappamondo, telescopio, poltrona
+        [-1, 1].forEach((sd) => box(0.06, 0.9, 0.9, winM, sd * (W / 2 - 0.02), H * 0.62, -D * 0.1));
+        // librerie alte lungo la parete sinistra
+        box(0.45, 2.5, 3.2, rWood, -W / 2 + 0.3, 1.25, 0.1);
+        const bookMats = [rRed, rBlue, rGreen, rGold, rCloth, rRug];
+        for (let row = 0; row < 4; row++) for (let i = 0; i < 6; i++) box(0.3, 0.38, 0.14, bookMats[(row * 3 + i) % 6], -W / 2 + 0.55, 0.45 + row * 0.6, -1.3 + i * 0.52);
+        col(-W / 2 + 0.4, -1.0, 0.7); col(-W / 2 + 0.4, 0.1, 0.7); col(-W / 2 + 0.4, 1.2, 0.7);
+        // scrivania + mappamondo + candela
+        box(1.5, 0.08, 0.8, rWood, 0.9, 0.8, 0.9);
+        box(0.08, 0.78, 0.7, rWood, 0.2, 0.39, 0.9); box(0.08, 0.78, 0.7, rWood, 1.6, 0.39, 0.9);
+        add(new THREE.SphereGeometry(0.22, 12, 10), rBlue, 1.25, 1.1, 0.9);
+        cyl(0.04, 0.2, rGold, 1.25, 0.9, 0.9, 6);
+        cyl(0.04, 0.2, rCloth, 0.6, 0.94, 0.85, 6); box(0.05, 0.05, 0.05, rFire, 0.6, 1.07, 0.85);
+        col(0.9, 0.9, 0.95);
+        // poltrona
+        box(0.8, 0.45, 0.8, rRed, 0.9, 0.22, 1.75); box(0.8, 0.7, 0.2, rRed, 0.9, 0.6, 2.0);
+        col(0.9, 1.75, 0.55);
+        // telescopio sul treppiede
+        [0, 2.1, 4.2].forEach((a) => { const m = cyl(0.03, 1.2, rWood, 1.55 + Math.cos(a) * 0.2, 0.55, -0.9 + Math.sin(a) * 0.2, 5); m.rotation.z = Math.cos(a) * 0.2; m.rotation.x = Math.sin(a) * 0.2; });
+        const tel = cyl(0.07, 1.3, rGold, 1.55, 1.4, -0.9, 8); tel.rotation.z = 0.9;
+        col(1.55, -0.9, 0.4);
+        // tappeto rotondo
+        cyl(1.0, 0.03, rBlue, -0.3, 0.02, 0.4, 20);
+        // letto piccolo nell'angolo
+        box(0.95, 0.4, 1.9, rWood, -W / 2 + 1.2, 0.2, -D / 2 + 1.3); box(0.85, 0.16, 1.5, rCloth, -W / 2 + 1.2, 0.46, -D / 2 + 1.4);
+        col(-W / 2 + 1.2, -D / 2 + 1.0, 0.75); col(-W / 2 + 1.2, -D / 2 + 1.8, 0.75);
+      } else {
+        // CABINA DEL CAPITANO: oblò, tavolo con carta nautica, amache, timone, barili e bauli
+        [-1, 1].forEach((sd) => [-1.3, 0.9].forEach((z) => { const o = cyl(0.42, 0.08, rGold, sd * (W / 2 - 0.02), H * 0.6, z, 16); o.rotation.z = Math.PI / 2; const o2 = cyl(0.34, 0.1, winM, sd * (W / 2 - 0.03), H * 0.6, z, 16); o2.rotation.z = Math.PI / 2; }));
+        // tavolo con carta nautica
+        box(2.1, 0.1, 1.2, rWood, 0.3, 0.8, 0.5);
+        box(0.1, 0.78, 0.1, rWood, -0.65, 0.39, 0.1); box(0.1, 0.78, 0.1, rWood, 1.25, 0.39, 0.1);
+        box(0.1, 0.78, 0.1, rWood, -0.65, 0.39, 0.9); box(0.1, 0.78, 0.1, rWood, 1.25, 0.39, 0.9);
+        box(1.5, 0.02, 0.9, rMap, 0.3, 0.87, 0.5); box(0.3, 0.025, 0.04, rRed, 0.1, 0.88, 0.4);
+        cyl(0.05, 0.25, rGold, 0.9, 0.98, 0.7, 8);
+        col(0.3, 0.5, 1.15);
+        [-0.9, 1.5].forEach((x) => stool(x, 0.5));
+        // amache (due letti a rete sospesi)
+        [[-W / 2 + 0.75, -0.4], [-W / 2 + 0.75, 1.5]].forEach(([x, z]) => {
+          cyl(0.04, 1.9, rDark, x, 0.95, z - 0.55, 6); cyl(0.04, 1.9, rDark, x, 0.95, z + 0.55, 6);
+          box(0.8, 0.12, 1.6, rCloth, x, 0.85, z); box(0.7, 0.14, 0.4, rBlue, x, 0.98, z - 0.6);
+          col(x, z, 0.7);
+        });
+        // timone al muro destro
+        const wheel = add(new THREE.TorusGeometry(0.55, 0.07, 8, 16), rWood, W / 2 - 0.2, 1.7, -D * 0.2);
+        wheel.rotation.y = Math.PI / 2;
+        for (let i = 0; i < 4; i++) { const sp = box(0.06, 1.1, 0.06, rWood, W / 2 - 0.2, 1.7, -D * 0.2); sp.rotation.x = (i * Math.PI) / 4; }
+        cyl(0.08, 0.7, rWood, W / 2 - 0.25, 1.35, -D * 0.2, 8).rotation.z = Math.PI / 2;
+        // barili e bauli, bandiera
+        barrel(W / 2 - 0.55, D * 0.25); barrel(W / 2 - 0.55, D * 0.25 + 0.8);
+        chest(W / 2 - 0.75, D * 0.05 - 0.2); box(0.04, 0.5, 0.9, rRed, 0, H - 0.7, -D / 2 + 0.07);
+        // rotolo di corda
+        const rope = add(new THREE.TorusGeometry(0.3, 0.09, 6, 14), rCloth, -W / 2 + 0.9, 0.12, D / 2 - 0.9); rope.rotation.x = Math.PI / 2;
+        col(-W / 2 + 0.9, D / 2 - 0.9, 0.45);
+        box(2.4, 0.03, 1.6, rNavy, 0.3, 0.02, 1.7);
+      }
       scene.add(g);
       rooms[key] = { key, group: g, W, D, H, colliders };
     });
@@ -976,6 +1056,12 @@ export default function PlanetDemo() {
     let snapOutCam = false;
 
     let charDir = findLandSpawn();
+    // asse di rotazione del sole, scelto in modo che il punto di partenza abbia giorno e notte
+    const SUN_N = new THREE.Vector3(0.35, 1, 0.25).normalize();
+    SUN_N.addScaledVector(charDir, 0.25 - SUN_N.dot(charDir)).normalize();
+    const SUN_U = new THREE.Vector3().crossVectors(SUN_N, new THREE.Vector3(0, 0, 1)).normalize();
+    const SUN_V = new THREE.Vector3().crossVectors(SUN_N, SUN_U).normalize();
+    const SUN_A0 = Math.atan2(charDir.dot(SUN_V), charDir.dot(SUN_U));
     let facing = new THREE.Vector3(0, 0, -1);
     let charFacing = new THREE.Vector3(0, 0, -1);
     let camPitch = 0.45;
@@ -1220,12 +1306,139 @@ export default function PlanetDemo() {
       background: "rgba(35,40,38,0.38)", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center",
       fontSize: "20px", cursor: "pointer", userSelect: "none", touchAction: "none", zIndex: 22,
     });
+    const audioPanel = document.createElement("div");
+    Object.assign(audioPanel.style, {
+      position: "absolute", top: "58px", right: "12px", padding: "8px", borderRadius: "12px", display: "none",
+      background: "rgba(35,40,38,0.7)", color: "#fff", font: "13px system-ui, sans-serif", zIndex: 22, flexDirection: "column", gap: "6px",
+    });
+    const chips = {};
+    [["music", "Musica"], ["sfx", "Effetti"], ["amb", "Ambiente"]].forEach(([k, label]) => {
+      const c = document.createElement("div");
+      Object.assign(c.style, { padding: "6px 12px", borderRadius: "8px", cursor: "pointer", userSelect: "none", touchAction: "none", textAlign: "center" });
+      const paint = () => {
+        c.textContent = (audio.isOn(k) ? "\u2713 " : "\u2715 ") + label;
+        c.style.background = audio.isOn(k) ? "rgba(120,190,120,0.55)" : "rgba(255,255,255,0.15)";
+      };
+      paint();
+      c.addEventListener("pointerdown", (e) => {
+        e.stopPropagation();
+        audio.start();
+        audio.toggle(k);
+        paint();
+        muteBtn.textContent = ["music", "sfx", "amb"].every((x) => !audio.isOn(x)) ? "\u{1F507}" : "\u{1F50A}";
+      });
+      chips[k] = c;
+      audioPanel.appendChild(c);
+    });
     muteBtn.addEventListener("pointerdown", (e) => {
       e.stopPropagation();
       audio.start();
-      muteBtn.textContent = audio.toggleMute() ? "\u{1F507}" : "\u{1F50A}";
+      audioPanel.style.display = audioPanel.style.display === "none" ? "flex" : "none";
     });
     mount.appendChild(muteBtn);
+    mount.appendChild(audioPanel);
+
+    // ---------- Splash / caricamento ----------
+    const splash = document.createElement("div");
+    Object.assign(splash.style, {
+      position: "absolute", inset: "0", zIndex: 60, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+      gap: "18px", background: "linear-gradient(#2c4a52, #7fb0a6 70%, #e8d9a8)", color: "#fff", font: "15px system-ui, sans-serif",
+      transition: "opacity 0.7s", textAlign: "center", padding: "24px",
+    });
+    splash.innerHTML = '<div style="font-size:54px;font-weight:700;letter-spacing:10px;text-shadow:0 3px 12px rgba(0,0,0,.35)">ISLAND</div>' +
+      '<div style="opacity:.85;max-width:300px">Un piccolo mondo da esplorare. Gli altri compaiono solo se ti raggiungono.</div>';
+    const barWrap = document.createElement("div");
+    Object.assign(barWrap.style, { width: "220px", height: "8px", borderRadius: "4px", background: "rgba(255,255,255,.25)", overflow: "hidden" });
+    const barFill = document.createElement("div");
+    Object.assign(barFill.style, { width: "0%", height: "100%", background: "#fff", transition: "width .25s" });
+    barWrap.appendChild(barFill);
+    const enterBtn = document.createElement("div");
+    enterBtn.textContent = "ENTRA";
+    Object.assign(enterBtn.style, {
+      display: "none", padding: "12px 38px", borderRadius: "30px", background: "#fff", color: "#2c4a52", fontWeight: "700",
+      letterSpacing: "3px", cursor: "pointer", userSelect: "none", touchAction: "none",
+    });
+    splash.appendChild(barWrap);
+    splash.appendChild(enterBtn);
+    mount.appendChild(splash);
+    let splashGone = false;
+    const splashStart = performance.now();
+    const splashTimer = setInterval(() => {
+      const total = Math.max(1, loadStat.pending);
+      const ratio = Math.min(1, loadStat.done / total);
+      barFill.style.width = Math.round(ratio * 100) + "%";
+      if ((loadStat.done >= loadStat.pending && performance.now() - splashStart > 900) || performance.now() - splashStart > 15000) {
+        barWrap.style.display = "none";
+        enterBtn.style.display = "block";
+        clearInterval(splashTimer);
+      }
+    }, 120);
+    function closeSplash() {
+      if (splashGone) return;
+      splashGone = true;
+      audio.start();
+      splash.style.opacity = "0";
+      splash.style.pointerEvents = "none";
+      setTimeout(() => splash.parentNode && splash.parentNode.removeChild(splash), 800);
+    }
+    enterBtn.addEventListener("pointerdown", (e) => { e.stopPropagation(); closeSplash(); });
+
+    // ---------- Minimappa (proiezione azimutale centrata su di te, "avanti" = su) ----------
+    const MAP_PX = 112, MAP_RES = 36, MAP_ANG = 1.25;
+    const mapCanvas = document.createElement("canvas");
+    mapCanvas.width = MAP_PX; mapCanvas.height = MAP_PX;
+    Object.assign(mapCanvas.style, { position: "absolute", top: "12px", left: "12px", width: MAP_PX + "px", height: MAP_PX + "px", borderRadius: "50%", border: "3px solid rgba(255,255,255,.75)", background: "#123", zIndex: 22, pointerEvents: "none", boxShadow: "0 2px 10px rgba(0,0,0,.3)" });
+    mount.appendChild(mapCanvas);
+    const mctx = mapCanvas.getContext("2d");
+    const mapTmp = document.createElement("canvas");
+    mapTmp.width = MAP_RES; mapTmp.height = MAP_RES;
+    const mtx = mapTmp.getContext("2d");
+    const mapImg = mtx.createImageData(MAP_RES, MAP_RES);
+    let mapTimer = 0;
+    const mpR = new THREE.Vector3(), mpD = new THREE.Vector3(), mpT = new THREE.Vector3();
+    function updateMinimap(dt) {
+      mapTimer -= dt;
+      if (mapTimer > 0) return;
+      mapTimer = 0.25;
+      mpR.crossVectors(facing, charDir).normalize();
+      for (let j = 0; j < MAP_RES; j++) {
+        for (let i = 0; i < MAP_RES; i++) {
+          const px = ((i + 0.5) / MAP_RES) * 2 - 1, py = ((j + 0.5) / MAP_RES) * 2 - 1;
+          const r = Math.hypot(px, py);
+          const o = (j * MAP_RES + i) * 4;
+          if (r > 1) { mapImg.data[o + 3] = 0; continue; }
+          const ang = r * MAP_ANG;
+          const k = r > 0.0001 ? Math.sin(ang) / r : 0;
+          mpD.copy(charDir).multiplyScalar(Math.cos(ang)).addScaledVector(mpR, px * k).addScaledVector(facing, -py * k).normalize();
+          const h = terrainHeight(mpD);
+          let c;
+          if (h <= SEA_LEVEL + 0.15) c = [70, 130, 168];
+          else if (h < SEA_LEVEL + 0.9) c = [226, 208, 150];
+          else if (h > 3.2) c = [128, 126, 122];
+          else c = [128, 170, 98];
+          mapImg.data[o] = c[0]; mapImg.data[o + 1] = c[1]; mapImg.data[o + 2] = c[2]; mapImg.data[o + 3] = 255;
+        }
+      }
+      mtx.putImageData(mapImg, 0, 0);
+      mctx.clearRect(0, 0, MAP_PX, MAP_PX);
+      mctx.imageSmoothingEnabled = true;
+      mctx.drawImage(mapTmp, 0, 0, MAP_PX, MAP_PX);
+      const Rm = MAP_PX / 2;
+      for (let i = 0; i < buildings.length; i++) {
+        mpD.copy(buildings[i].pos).normalize();
+        const dp = mpD.dot(charDir);
+        const ang = Math.acos(Math.min(1, Math.max(-1, dp)));
+        if (ang > MAP_ANG * 0.97) continue;
+        mpT.copy(mpD).addScaledVector(charDir, -dp);
+        const tl = mpT.length();
+        if (tl < 1e-5) continue;
+        const rr = (ang / MAP_ANG) * Rm;
+        mctx.fillStyle = "#d9503f";
+        mctx.fillRect(Rm + (mpT.dot(mpR) / tl) * rr - 2, Rm - (mpT.dot(facing) / tl) * rr - 2, 4, 4);
+      }
+      mctx.fillStyle = "#fff"; mctx.strokeStyle = "#222"; mctx.lineWidth = 1.5;
+      mctx.beginPath(); mctx.moveTo(Rm, Rm - 6); mctx.lineTo(Rm + 5, Rm + 5); mctx.lineTo(Rm - 5, Rm + 5); mctx.closePath(); mctx.fill(); mctx.stroke();
+    }
 
     // ---------- Polvere (passi e atterraggio) ----------
     const dustGeo = new THREE.SphereGeometry(0.12, 6, 5);
@@ -1336,14 +1549,14 @@ export default function PlanetDemo() {
       quality.sample(dt, t);
       if (mixer) mixer.update(dt);
 
-      const DAY_CYCLE_SECONDS = 900;
-      const dayPhase = (t % DAY_CYCLE_SECONDS) / DAY_CYCLE_SECONDS;
-      const sunAngle = dayPhase * Math.PI * 2;
-      const sunHeight = Math.sin(sunAngle);
-      sunDirVec.set(Math.cos(sunAngle) * 3, Math.max(sunHeight, -0.15) * 2.2 + 0.4, Math.sin(sunAngle) * 1.3).normalize();
-      const dayFactor = smoothstep(-0.22, 0.3, sunHeight);
-      const duskFactor = Math.max(0, 1 - Math.abs(sunHeight) * 2.6);
-      sun.intensity = 0.4 + dayFactor * 0.8;
+      // Il sole gira attorno al pianeta: giorno e notte dipendono da DOVE ti trovi (terminatore reale).
+      const DAY_CYCLE_SECONDS = 600;
+      const sunAngle = SUN_A0 - 0.7 + ((t % DAY_CYCLE_SECONDS) / DAY_CYCLE_SECONDS) * Math.PI * 2;
+      sunDirVec.copy(SUN_U).multiplyScalar(Math.cos(sunAngle)).addScaledVector(SUN_V, Math.sin(sunAngle));
+      const sunHeight = charDir.dot(sunDirVec); // 1 = sole allo zenit, -1 = mezzanotte
+      const dayFactor = smoothstep(-0.12, 0.3, sunHeight);
+      const duskFactor = Math.max(0, 1 - Math.abs(sunHeight - 0.05) * 4);
+      sun.intensity = 0.03 + dayFactor * 1.1;
       sun.color.set("#7a8ab0").lerp(dayColorTmp.set("#fff3da"), dayFactor).lerp(duskColorTmp.set("#ff9a5c"), duskFactor * 0.55);
       hemi.intensity = 0.55 + dayFactor * 0.55;
       hemi.color.set("#4a5578").lerp(dayColorTmp.set("#dfe8e6"), dayFactor);
@@ -1448,6 +1661,7 @@ export default function PlanetDemo() {
         blob.scale.setScalar(Math.max(0.4, 1 - jumpHeight * 0.25));
         animateLimbs(moving, dt);
         audio.update(dt, 0, dayFactor, true);
+        mapCanvas.style.display = "none";
         character.scale.set(1, 1, 1);
 
         // fixed cutaway camera, distance adapted to the screen shape so the whole room always fits
@@ -1576,6 +1790,8 @@ export default function PlanetDemo() {
       landSquash = Math.max(0, landSquash - dt * 5);
       character.scale.set(1 + 0.12 * landSquash, 1 - 0.2 * landSquash, 1 + 0.12 * landSquash);
       updateDust(dt);
+      mapCanvas.style.display = "block";
+      updateMinimap(dt);
       {
         const h = terrainHeight(charDir);
         audio.update(dt, Math.max(0.05, Math.min(1, 1 - (h - SEA_LEVEL) / 2.5)), dayFactor, false);
@@ -1638,6 +1854,10 @@ export default function PlanetDemo() {
       mount.removeChild(jumpBtn);
       mount.removeChild(actionBtn);
       mount.removeChild(muteBtn);
+      mount.removeChild(audioPanel);
+      mount.removeChild(mapCanvas);
+      clearInterval(splashTimer);
+      if (splash.parentNode) splash.parentNode.removeChild(splash);
       window.removeEventListener("pointerdown", startAudio);
       window.removeEventListener("keydown", startAudio);
       mount.removeChild(fadeEl);
