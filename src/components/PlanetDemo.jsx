@@ -39,7 +39,7 @@ function buildInstanced(sources, placements) {
 // A handful of fixed "wave directions" summed together — cheap and good enough
 // for gentle planet terrain, with none of the pole-pinching artifacts you'd get
 // from projecting 2D noise onto a sphere via spherical coordinates.
-const NOISE_WAVES = [
+let NOISE_WAVES = [
   { v: new THREE.Vector3(1, 0.3, -0.5).normalize(), f: 1.3, a: 1.0, p: 0.7 },
   { v: new THREE.Vector3(-0.6, 1, 0.2).normalize(), f: 2.1, a: 0.5, p: 1.9 },
   { v: new THREE.Vector3(0.4, -0.7, 1).normalize(), f: 3.7, a: 0.25, p: 3.1 },
@@ -56,7 +56,7 @@ function noiseAt(dir) {
 }
 // Water is concentrated into exactly two seas instead of scattered wherever the
 // noise happens to dip — each sea is a region around a fixed center direction.
-const SEA_CENTERS = [new THREE.Vector3(0.6, -0.3, 0.7).normalize(), new THREE.Vector3(-0.7, 0.2, -0.5).normalize()];
+let SEA_CENTERS = [new THREE.Vector3(0.6, -0.3, 0.7).normalize(), new THREE.Vector3(-0.7, 0.2, -0.5).normalize()];
 const SEA_RADIUS = 0.6; // radians
 function seaMask(dir) {
   let m = 0;
@@ -67,7 +67,7 @@ function seaMask(dir) {
   return m; // 1 deep inside a sea region, fading to 0 outside SEA_RADIUS
 }
 // Catene montuose: cime lontane dai mari e dal punto di partenza.
-const MOUNTAINS = [
+let MOUNTAINS = [
   { c: new THREE.Vector3(0.9, 0.2, -0.4).normalize(), r: 0.58, h: 8.0 },
   { c: new THREE.Vector3(-0.8, -0.4, 0.45).normalize(), r: 0.52, h: 7.0 },
   { c: new THREE.Vector3(0.2, -0.9, -0.3).normalize(), r: 0.5, h: 6.2 },
@@ -83,11 +83,52 @@ function mountainAt(dir) {
   }
   return m;
 }
+let HILLS = [
+  { v: new THREE.Vector3(0.7, 0.2, -0.6), f: 7.5, p: 1.3 },
+  { v: new THREE.Vector3(-0.3, 0.8, 0.5), f: 9.1, p: 0.4 },
+];
 function hillsAt(dir) {
   // colline morbide sparse su tutto il pianeta
-  const a = Math.sin(dir.dot(new THREE.Vector3(0.7, 0.2, -0.6)) * 7.5 + 1.3);
-  const b = Math.sin(dir.dot(new THREE.Vector3(-0.3, 0.8, 0.5)) * 9.1 + 0.4);
+  const a = Math.sin(dir.dot(HILLS[0].v) * HILLS[0].f + HILLS[0].p);
+  const b = Math.sin(dir.dot(HILLS[1].v) * HILLS[1].f + HILLS[1].p);
   return Math.max(0, a * b) * 2.2;
+}
+// ---------- Mondo da seed: il codice del mondo decide forma di mari, montagne e colline ----------
+const WORLD_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789";
+function hashStr(str) {
+  let h = 2166136261;
+  for (let i = 0; i < str.length; i++) h = Math.imul(h ^ str.charCodeAt(i), 16777619);
+  return h >>> 0;
+}
+function mulberry32(a) {
+  return () => {
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+const LEGACY_WORLD = { NOISE_WAVES, SEA_CENTERS, MOUNTAINS, HILLS };
+function configureWorld(code) {
+  if (!code) { ({ NOISE_WAVES, SEA_CENTERS, MOUNTAINS, HILLS } = LEGACY_WORLD); return; }
+  const R = mulberry32(hashStr(code));
+  const rv = () => new THREE.Vector3(R() * 2 - 1, R() * 2 - 1, R() * 2 - 1).normalize();
+  const START = new THREE.Vector3(0, 1, 0); // il punto di partenza deve restare terra
+  const pick = (margin, avoid = []) => {
+    let v = rv();
+    for (let i = 0; i < 200; i++) {
+      v = rv();
+      if (v.angleTo(START) > margin && avoid.every(([c, m]) => v.angleTo(c) > m)) return v;
+    }
+    return v;
+  };
+  NOISE_WAVES = [[1.3, 1.0], [2.1, 0.5], [3.7, 0.25], [5.3, 0.125]].map(([f, a]) => ({ v: rv(), f, a, p: R() * Math.PI * 2 }));
+  const s1 = pick(SEA_RADIUS + 0.25);
+  const s2 = pick(SEA_RADIUS + 0.25, [[s1, 1.4]]);
+  SEA_CENTERS = [s1, s2];
+  const seaAvoid = SEA_CENTERS.map((c) => [c, SEA_RADIUS * 0.8]);
+  MOUNTAINS = [[0.58, 8.0], [0.52, 7.0], [0.5, 6.2], [0.4, 5.0]].map(([r, h]) => ({ c: pick(r * 0.7 + 0.2, seaAvoid), r, h }));
+  HILLS = [{ v: rv(), f: 7.5, p: R() * 6.28 }, { v: rv(), f: 9.1, p: R() * 6.28 }];
 }
 function terrainHeight(dir) {
   const noise = noiseAt(dir);
@@ -125,6 +166,18 @@ export default function PlanetDemo() {
       loadStat.pending++;
       return Promise.resolve(loadModel(pth)).finally(() => loadStat.done++);
     };
+    // Codice del mondo: decide il seed. Chi crea lo genera qui, gli invitati lo ricevono dal link.
+    const wcGet = (k) => { try { return localStorage.getItem(k); } catch { return null; } };
+    const wcParams = new URLSearchParams(location.search);
+    const wcUrlRoom = (wcParams.get("room") || "").toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 12) || null;
+    const wcTest = wcParams.has("test");
+    let wcMissions = 0;
+    try { wcMissions = JSON.parse(wcGet("island_missions") || "[]").length; } catch { /* ignora */ }
+    const wcCanCreate = wcGet("island_role") !== "guest" || wcMissions >= 6;
+    const wcNewCode = () => Array.from(crypto.getRandomValues(new Uint8Array(8)), (b) => WORLD_ALPHABET[b % WORLD_ALPHABET.length]).join("");
+    const worldCode = wcUrlRoom || (wcTest ? null : wcGet("island_myroom")) || (!wcTest && wcCanCreate ? wcNewCode() : null);
+    configureWorld(worldCode);
+
     const mount = mountRef.current;
     const width = mount.clientWidth;
     const height = mount.clientHeight;
@@ -234,7 +287,7 @@ export default function PlanetDemo() {
     // ---------- Clouds: small fluffy low-poly clusters drifting around the planet ----------
     const cloudMat = new THREE.MeshBasicMaterial({ color: "#ffffff" });
     const clouds = [];
-    let cloudSeed = 7;
+    let cloudSeed = worldCode ? (hashStr(worldCode + "c") % 233280) || 7 : 7;
     function cloudRand() {
       cloudSeed = (cloudSeed * 9301 + 49297) % 233280;
       return cloudSeed / 233280;
@@ -256,7 +309,7 @@ export default function PlanetDemo() {
     }
 
     // ---------- Deterministic PRNG (so reloading gives the same layout) ----------
-    let seed = 1;
+    let seed = worldCode ? (hashStr(worldCode) % 233280) || 1 : 1;
     function rand() {
       seed = (seed * 9301 + 49297) % 233280;
       return seed / 233280;
@@ -1504,7 +1557,7 @@ export default function PlanetDemo() {
       if (isTestMode && !urlRoom) return { mode: "solo", label: "ENTRA (TEST)", msg: "Modalita' test: gioco da solo con un compagno simulato." };
       if (urlRoom) return { mode: "join", code: urlRoom, host: urlRoom === myRoom, label: "ENTRA NEL MONDO", msg: urlRoom === "test" ? "Stanza di sviluppo." : "Sei stato invitato in un mondo." };
       if (myRoom) return { mode: "join", code: myRoom, host: true, label: "TORNA NEL TUO MONDO", msg: "Il tuo mondo ti aspetta." };
-      if (canCreate()) return { mode: "create", label: "CREA IL TUO MONDO", msg: "Crea un mondo tutto tuo e invita chi vuoi." };
+      if (canCreate()) return { mode: "create", code: worldCode, label: "CREA IL TUO MONDO", msg: "Crea un mondo tutto tuo e invita chi vuoi." };
       return { mode: "solo", label: "ESPLORA DA SOLO", msg: "Per creare il tuo mondo serve un invito: completa tutte le missioni nel mondo di chi ti ha invitato." };
     }
     let entry = computeEntry();
@@ -1858,7 +1911,7 @@ export default function PlanetDemo() {
           entry = { ...computeEntry() };
           entry.code = undefined;
           if (!canCreate()) entry = { mode: "solo", label: "ESPLORA DA SOLO", msg: "Questo mondo non esiste piu'. Chiedi un nuovo invito, oppure completa le missioni per creare il tuo mondo." };
-          else entry = { mode: "create", label: "CREA IL TUO MONDO", msg: "Questo mondo non esiste piu'. Puoi crearne uno nuovo." };
+          else entry = { mode: "create", code: worldCode, label: "CREA IL TUO MONDO", msg: "Questo mondo non esiste piu'. Puoi crearne uno nuovo." };
         } else if (why === "full") entry = { ...entry, msg: "Questo mondo e' al completo. Riprova tra poco.", label: "RIPROVA" };
         else if (why === "notest") entry = { mode: "solo", label: "ESPLORA DA SOLO", msg: "La stanza di test non e' attiva su questo server." };
         else if (why === "busy") entry = { ...entry, msg: "Il server e' molto occupato. Riprova tra poco.", label: "RIPROVA" };

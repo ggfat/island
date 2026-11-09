@@ -80,7 +80,11 @@ wss.on("connection", (ws, req) => {
     room = rooms.get("test") || makeRoom("test", token, TEST_CAP);
   } else if (mode === "create") {
     if (rooms.size >= MAX_ROOMS) return fail(ws, "busy");
-    room = makeRoom(newCode(), token, ROOM_CAP);
+    // il client genera il codice (da cui deriva la forma del mondo): il server lo accetta se valido e libero
+    if (code) {
+      if (!/^[a-hj-km-np-z2-9]{8}$/.test(code) || rooms.has(code)) return fail(ws, "exists");
+      room = makeRoom(code, token, ROOM_CAP);
+    } else room = makeRoom(newCode(), token, ROOM_CAP);
   } else {
     room = rooms.get(code);
     if (!room) {
