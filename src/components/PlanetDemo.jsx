@@ -1447,6 +1447,37 @@ export default function PlanetDemo() {
     mount.appendChild(muteBtn);
     mount.appendChild(audioPanel);
 
+    // ---------- Identita', mondi e missioni ----------
+    const store = {
+      get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+      set(k, v) { try { localStorage.setItem(k, v); } catch { /* ignora */ } },
+      del(k) { try { localStorage.removeItem(k); } catch { /* ignora */ } },
+    };
+    let myToken = store.get("island_token");
+    if (!myToken) {
+      myToken = Array.from(crypto.getRandomValues(new Uint8Array(12)), (b) => b.toString(16).padStart(2, "0")).join("");
+      store.set("island_token", myToken);
+    }
+    const urlParams = new URLSearchParams(location.search);
+    const isTestMode = urlParams.has("test");
+    const urlRoom = (urlParams.get("room") || "").toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 12) || null;
+    const TOTAL_MISSIONS = 6;
+    let missionsDone = new Set();
+    if (!isTestMode) { try { missionsDone = new Set(JSON.parse(store.get("island_missions") || "[]")); } catch { /* ignora */ } }
+    let role = store.get("island_role"); // "host" (ha creato un mondo) | "guest" (invitato)
+    let myRoom = store.get("island_myroom");
+    let roomName = null, roomCap = 6;
+    let curMode = "join", curCode = null, curHost = false;
+    const canCreate = () => role !== "guest" || missionsDone.size >= TOTAL_MISSIONS;
+    function computeEntry() {
+      if (isTestMode && !urlRoom) return { mode: "solo", label: "ENTRA (TEST)", msg: "Modalita' test: gioco da solo con un compagno simulato." };
+      if (urlRoom) return { mode: "join", code: urlRoom, host: urlRoom === myRoom, label: "ENTRA NEL MONDO", msg: urlRoom === "test" ? "Stanza di sviluppo." : "Sei stato invitato in un mondo." };
+      if (myRoom) return { mode: "join", code: myRoom, host: true, label: "TORNA NEL TUO MONDO", msg: "Il tuo mondo ti aspetta." };
+      if (canCreate()) return { mode: "create", label: "CREA IL TUO MONDO", msg: "Crea un mondo tutto tuo e invita chi vuoi." };
+      return { mode: "solo", label: "ESPLORA DA SOLO", msg: "Per creare il tuo mondo serve un invito: completa tutte le missioni nel mondo di chi ti ha invitato." };
+    }
+    let entry = computeEntry();
+
     // ---------- Splash / caricamento ----------
     const splash = document.createElement("div");
     Object.assign(splash.style, {
@@ -1455,14 +1486,14 @@ export default function PlanetDemo() {
       transition: "opacity 0.7s", textAlign: "center", padding: "24px",
     });
     splash.innerHTML = '<div style="font-size:54px;font-weight:700;letter-spacing:10px;text-shadow:0 3px 12px rgba(0,0,0,.35)">ISLAND</div>' +
-      '<div style="opacity:.85;max-width:300px">Un piccolo mondo da esplorare. Gli altri compaiono solo se ti raggiungono.</div>';
+      '<div id="splashMsg" style="opacity:.9;max-width:300px;min-height:3em">' + entry.msg + '</div>';
     const barWrap = document.createElement("div");
     Object.assign(barWrap.style, { width: "220px", height: "8px", borderRadius: "4px", background: "rgba(255,255,255,.25)", overflow: "hidden" });
     const barFill = document.createElement("div");
     Object.assign(barFill.style, { width: "0%", height: "100%", background: "#fff", transition: "width .25s" });
     barWrap.appendChild(barFill);
     const enterBtn = document.createElement("div");
-    enterBtn.textContent = "ENTRA";
+    enterBtn.textContent = entry.label;
     Object.assign(enterBtn.style, {
       display: "none", padding: "12px 38px", borderRadius: "30px", background: "#fff", color: "#2c4a52", fontWeight: "700",
       letterSpacing: "3px", cursor: "pointer", userSelect: "none", touchAction: "none",
@@ -1482,6 +1513,17 @@ export default function PlanetDemo() {
         clearInterval(splashTimer);
       }
     }, 120);
+    const splashMsgEl = splash.querySelector("#splashMsg");
+    function showSplash(msg, label) {
+      splashMsgEl.textContent = msg;
+      enterBtn.textContent = label;
+      splashGone = false;
+      splash.style.display = "flex";
+      splash.style.pointerEvents = "auto";
+      requestAnimationFrame(() => (splash.style.opacity = "1"));
+      barWrap.style.display = "none";
+      enterBtn.style.display = "block";
+    }
     function closeSplash() {
       if (splashGone) return;
       splashGone = true;
@@ -1671,7 +1713,6 @@ export default function PlanetDemo() {
     // ---------- Multiplayer (relay) ----------
     const remotes = new Map(); // id -> { root, mixer, actions, curDir, tgtDir, facing, jump, moving, inside, bubble, waveUntil }
     const relayUrl = (import.meta.env && import.meta.env.VITE_RELAY_URL) || `${location.protocol === "https:" ? "wss" : "ws"}://${location.hostname}:8787`;
-    const roomName = new URLSearchParams(location.search).get("room") || "main";
     let myNetId = null;
     let playersOnline = 1;
     const netLabel = document.createElement("div");
@@ -1728,11 +1769,38 @@ export default function PlanetDemo() {
     let net = { connected: false, send() {}, close() {}, reconnect() {} };
     function startNet() {
       if (disposed || net.connected || netStarted) return;
+      if (entry.mode === "solo") { netLabel.textContent = "\u25CB da solo"; return; }
       netStarted = true;
+      curMode = entry.mode; curCode = entry.code || null; curHost = !!entry.host;
       net = connectRelay({
-      url: `${relayUrl}/?room=${encodeURIComponent(roomName)}`,
+      url: () => `${relayUrl}/?room=${curCode || ""}&token=${myToken}&mode=${curMode}${curHost ? "&host=1" : ""}`,
+      onError: (why) => {
+        net.close();
+        net = { connected: false, send() {}, close() {}, reconnect() {} };
+        netStarted = false;
+        [...remotes.keys()].forEach(removeRemote);
+        netLabel.textContent = "\u25CB offline";
+        if (why === "noroom") {
+          if (curCode && curCode === myRoom) { store.del("island_myroom"); myRoom = null; }
+          urlParams.delete("room");
+          history.replaceState(null, "", location.pathname);
+          entry = { ...computeEntry() };
+          entry.code = undefined;
+          if (!canCreate()) entry = { mode: "solo", label: "ESPLORA DA SOLO", msg: "Questo mondo non esiste piu'. Chiedi un nuovo invito, oppure completa le missioni per creare il tuo mondo." };
+          else entry = { mode: "create", label: "CREA IL TUO MONDO", msg: "Questo mondo non esiste piu'. Puoi crearne uno nuovo." };
+        } else if (why === "full") entry = { ...entry, msg: "Questo mondo e' al completo. Riprova tra poco.", label: "RIPROVA" };
+        else if (why === "notest") entry = { mode: "solo", label: "ESPLORA DA SOLO", msg: "La stanza di test non e' attiva su questo server." };
+        else if (why === "busy") entry = { ...entry, msg: "Il server e' molto occupato. Riprova tra poco.", label: "RIPROVA" };
+        else entry = { ...entry, msg: "Impossibile entrare nel mondo (" + why + ").", label: "RIPROVA" };
+        showSplash(entry.msg, entry.label);
+      },
       onHello: (m) => {
         myNetId = m.id;
+        roomName = m.room; curCode = m.room; curMode = "join"; roomCap = m.cap || 6;
+        if (m.host) { curHost = true; role = role || "host"; store.set("island_role", role); store.set("island_myroom", m.room); myRoom = m.room; }
+        else if (!role) { role = "guest"; store.set("island_role", "guest"); }
+        entry = { mode: "join", code: m.room, host: !!m.host, label: m.host ? "TORNA NEL TUO MONDO" : "TORNA NEL MONDO", msg: "" };
+        if (m.room !== "test") history.replaceState(null, "", location.pathname + "?room=" + m.room + (isTestMode ? "&test=1" : ""));
         // evita di spawnare sopra un altro giocatore: ognuno parte in un punto leggermente diverso
         if (m.id > 1 && !inside) {
           const ang = m.id * 1.0;
@@ -1748,7 +1816,9 @@ export default function PlanetDemo() {
       },
       onState: (m) => {
         playersOnline = m.n;
-        netLabel.textContent = "● " + (m.n > 1 ? m.n + " nel mondo" : "da solo");
+        roomCap = m.cap || roomCap;
+        netLabel.textContent = "\u25CF " + m.n + "/" + roomCap + (m.n > 1 ? " nel mondo" : " \u00B7 da solo");
+        (m.pl || []).forEach((pid) => { const lp = places.find((x) => x.pid === pid); if (lp && !lp.locked) lp.locked = true; });
         const present = new Set();
         m.p.forEach((q) => {
           present.add(q.id);
@@ -1773,9 +1843,7 @@ export default function PlanetDemo() {
     }
     let netStarted = false;
     let disposed = false;
-    // ci si collega solo quando il modello del personaggio e' pronto, cosi' gli altri compaiono subito con il modello giusto
-    loadModelT("/models/characters/Characters_Anne.gltf").finally(() => setTimeout(startNet, 0));
-    const netFallback = setTimeout(startNet, 8000);
+    const netFallback = 0; // la connessione parte quando premi il pulsante della schermata iniziale
     let netSendT = 0;
     const tmpUp = new THREE.Vector3(), tmpPos = new THREE.Vector3(), tmpLook = new THREE.Vector3();
     function updateRemotes(dt) {
@@ -1867,6 +1935,7 @@ export default function PlanetDemo() {
       c.addEventListener("pointerdown", (e) => e.stopPropagation());
       c.addEventListener("click", (e) => { e.stopPropagation(); menuPanel.style.display = "none"; fn(); });
       menuPanel.appendChild(c);
+      return c;
     };
     const menuBtn = document.createElement("div");
     menuBtn.textContent = "☰";
@@ -1896,7 +1965,7 @@ export default function PlanetDemo() {
     helpEl.addEventListener("pointerdown", (e) => { e.stopPropagation(); helpEl.style.display = "none"; });
     function inviteLink() {
       const u = new URL(location.href);
-      u.searchParams.set("room", roomName);
+      u.searchParams.set("room", curCode);
       u.searchParams.delete("test");
       return u.toString();
     }
@@ -1920,6 +1989,7 @@ export default function PlanetDemo() {
       toast(ok ? "Link copiato!" : "Seleziona il testo e copialo a mano");
     });
     function invite() {
+      if (!curCode || !net.connected) { toast("Entra prima in un mondo online per invitare qualcuno."); return; }
       const link = inviteLink();
       if (navigator.share) { navigator.share({ title: "Island", text: "Vieni a esplorare con me!", url: link }).catch(() => {}); return; }
       shareInput.value = link;
@@ -1930,22 +2000,48 @@ export default function PlanetDemo() {
       net = { connected: false, send() {}, close() {}, reconnect() {} };
       netStarted = false;
       [...remotes.keys()].forEach(removeRemote);
-      netLabel.textContent = "○ offline";
-      splashGone = false;
-      splash.style.display = "flex";
-      splash.style.pointerEvents = "auto";
-      requestAnimationFrame(() => (splash.style.opacity = "1"));
-      barWrap.style.display = "none";
-      enterBtn.style.display = "block";
-      enterBtn.textContent = "TORNA NEL GIOCO";
+      netLabel.textContent = "\u25CB offline";
+      if (curCode) entry = { mode: "join", code: curCode, host: curHost, label: curHost ? "TORNA NEL TUO MONDO" : "TORNA NEL MONDO", msg: "" };
+      showSplash(entry.msg || "Sei fuori dal gioco.", entry.label);
+    }
+    const missionsEl = document.createElement("div");
+    Object.assign(missionsEl.style, { position: "absolute", inset: "0", zIndex: 55, display: "none", alignItems: "center", justifyContent: "center", background: "rgba(10,20,25,0.6)" });
+    mount.appendChild(missionsEl);
+    missionsEl.addEventListener("pointerdown", (e) => { e.stopPropagation(); missionsEl.style.display = "none"; });
+    function showMissions() {
+      const rows = places.map((pl) => '<div>' + (missionsDone.has(pl.name) ? "\u2705" : "\u2B1C") + " " + pl.name + "</div>").join("");
+      const done = missionsDone.size;
+      missionsEl.innerHTML = '<div style="background:#fff;color:#223;max-width:340px;margin:16px;padding:20px 22px;border-radius:18px;font:14px/1.7 system-ui,sans-serif;box-shadow:0 8px 30px rgba(0,0,0,.4)">' +
+        '<div style="font-size:19px;font-weight:700;margin-bottom:6px">Missioni ' + done + "/" + TOTAL_MISSIONS + "</div>" +
+        '<div style="margin-bottom:8px;opacity:.8">Attiva ogni luogo speciale insieme a un\'altra persona. Un luogo attivato resta attivo.</div>' + rows +
+        '<div style="margin-top:10px;font-weight:600">' + (done >= TOTAL_MISSIONS ? "Hai completato tutto: puoi creare il tuo mondo da \u2630." : "Completale tutte per poter creare il tuo mondo.") + "</div>" +
+        '<div style="margin-top:12px;text-align:center"><span style="display:inline-block;padding:9px 30px;border-radius:22px;background:#2c4a52;color:#fff;font-weight:700;cursor:pointer">Chiudi</span></div></div>';
+      missionsEl.style.display = "flex";
+    }
+    function completeMission(pl) {
+      missionsDone.add(pl.name);
+      if (!isTestMode) store.set("island_missions", JSON.stringify([...missionsDone]));
+      const k = missionsDone.size;
+      toast(k >= TOTAL_MISSIONS ? "\u{1F389} Tutte le missioni completate! Ora puoi creare il tuo mondo da \u2630." : "\u2705 Missione completata: " + pl.name + " (" + k + "/" + TOTAL_MISSIONS + ")", 6000);
     }
     menuItem("❓ Aiuto", showHelp);
     menuItem("\u{1F517} Invita amici", invite);
-    menuItem("\u{1F504} Riconnetti", () => { if (net.connected) { toast("Sei gia' online"); return; } netStarted = true; net.reconnect(); toast("Mi riconnetto..."); });
-    menuItem("\u2600\uFE0F Giorno / notte: " + (alwaysDay ? "sempre giorno" : "automatico"), () => {
+    menuItem("\u{1F3AF} Missioni", showMissions);
+    menuItem("\u{1F30D} Crea un nuovo mondo", () => {
+      if (!canCreate()) { toast("Completa tutte le missioni per creare il tuo mondo (" + missionsDone.size + "/" + TOTAL_MISSIONS + ")."); return; }
+      if (!window.confirm("Creare un nuovo mondo? Quello attuale resta raggiungibile solo con il suo link.")) return;
+      store.del("island_myroom");
+      location.href = location.pathname;
+    });
+    menuItem("\u{1F504} Riconnetti", () => {
+      if (net.connected) { toast("Sei gia' online"); return; }
+      if (!netStarted) { startNet(); toast("Mi connetto..."); return; }
+      net.reconnect(); toast("Mi riconnetto...");
+    });
+    const dayItem = menuItem("\u2600\uFE0F Giorno / notte: " + (alwaysDay ? "sempre giorno" : "automatico"), () => {
       alwaysDay = !alwaysDay;
       try { localStorage.setItem("island_day", alwaysDay ? "1" : "0"); } catch { /* ignora */ }
-      menuPanel.children[3].textContent = "\u2600\uFE0F Giorno / notte: " + (alwaysDay ? "sempre giorno" : "automatico");
+      dayItem.textContent = "\u2600\uFE0F Giorno / notte: " + (alwaysDay ? "sempre giorno" : "automatico");
       toast(alwaysDay ? "Sempre giorno" : "Giorno e notte automatici");
     });
     menuItem("\u{1F6AA} Esci", leaveGame);
@@ -1959,6 +2055,7 @@ export default function PlanetDemo() {
     // ---------- Luoghi speciali: si attivano solo se almeno 2 persone sono vicine ----------
     const TEST_PARTNER = new URLSearchParams(location.search).has("test"); // ?test=1 simula un secondo giocatore
     const PLACE_RADIUS = 3.4;
+    let placeNearFlag = false; // i suoni dei luoghi si sentono solo da vicino
     const places = [];
     const mkMat = (c) => new THREE.MeshToonMaterial({ color: c, gradientMap });
     const glowMat = (c) => new THREE.MeshBasicMaterial({ color: c });
@@ -1983,7 +2080,7 @@ export default function PlanetDemo() {
       label.scale.set(5.5, 1.03, 1); label.position.y = 5.2; label.renderOrder = 11;
       g.add(label);
       const upd = build(g);
-      return { name, group: g, ring, beacon, label, upd, act: 0, wasOn: false, dir: null, count: 1 };
+      return { name, group: g, ring, beacon, label, upd, act: 0, wasOn: false, dir: null, count: 1, locked: false, pid: -1 };
     }
     const BUILDERS = [
       ["Fontana dei desideri", (g) => {
@@ -2043,12 +2140,12 @@ export default function PlanetDemo() {
         const bells = [];
         for (let i = 0; i < 5; i++) { const piv = new THREE.Group(); piv.position.set(-1.2 + i * 0.6, 2.55, 0); const b = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.17, 0.5 + i * 0.12, 8), mkMat("#d4af37")); b.position.y = -0.55 - i * 0.06; piv.add(b); g.add(piv); bells.push(piv); }
         let timer = 0, idx = 0;
-        return (act, t, dt) => { bells.forEach((b, i) => { b.rotation.z = Math.sin(t * 2.4 + i * 1.3) * 0.35 * act; }); if (act > 0.6) { timer -= dt; if (timer <= 0) { timer = 0.55 + Math.random() * 0.5; audio.chime(idx++ + Math.floor(Math.random() * 3)); } } };
+        return (act, t, dt) => { bells.forEach((b, i) => { b.rotation.z = Math.sin(t * 2.4 + i * 1.3) * 0.35 * act; }); if (act > 0.6 && placeNearFlag) { timer -= dt; if (timer <= 0) { timer = 0.55 + Math.random() * 0.5; audio.chime(idx++ + Math.floor(Math.random() * 3)); } } };
       }],
     ];
     {
       const chosen = [];
-      for (const [name, build] of BUILDERS) {
+      for (const [bi, [name, build]] of BUILDERS.entries()) {
         for (let attempt = 0; attempt < 2500; attempt++) {
           const d = randomDir();
           const h = terrainHeight(d);
@@ -2075,6 +2172,7 @@ export default function PlanetDemo() {
           const pl = newPlace(name, build);
           const surf = getSurfacePoint(d);
           pl.dir = d.clone();
+          pl.pid = bi;
           pl.group.position.copy(surf.point);
           pl.group.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), surf.normal);
           scene.add(pl.group);
@@ -2099,14 +2197,17 @@ export default function PlanetDemo() {
         remotes.forEach((r) => { if (r.curDir && !r.inside && r.curDir.angleTo(pl.dir) < r2) n++; });
         if (TEST_PARTNER && n >= 1) n++;
         pl.count = n;
-        const on = n >= 2;
+        // una volta attivato, un luogo resta attivo per sempre (anche per chi arriva dopo)
+        if (n >= 2 && !pl.locked) { pl.locked = true; audio.place(); net.send({ t: "place", p: pl.pid }); }
+        const on = pl.locked;
         pl.act += ((on ? 1 : 0) - pl.act) * Math.min(1, dt * 2.5);
-        if (on && !pl.wasOn) audio.place();
-        pl.wasOn = on;
+        const here = !inside && charDir.angleTo(pl.dir) < r2;
+        if (here && on && pl.act > 0.5 && !missionsDone.has(pl.name)) completeMission(pl);
+        placeNearFlag = !inside && charDir.angleTo(pl.dir) * PLANET_R < 22;
         pl.ring.material.opacity = 0.3 + 0.5 * pl.act + (n === 1 ? 0.15 * Math.sin(t * 5) : 0);
         pl.ring.material.color.set("#ffd35c").lerp(new THREE.Color("#ffffff"), pl.act);
         pl.upd(pl.act, t, dt);
-        if (!inside && charDir.angleTo(pl.dir) < r2 * 1.6) hint = n >= 2 ? "✨ " + pl.name + " — attivata!" : "✨ " + pl.name + " — serve qualcun altro qui con te";
+        if (!inside && charDir.angleTo(pl.dir) < r2 * 1.6) hint = on ? "✨ " + pl.name + " — " + (missionsDone.has(pl.name) ? "missione completata ✅" : "attivo!") : "✨ " + pl.name + " — serve qualcun altro qui con te";
       }
       let nearest = null, nearAng = 9;
       for (const pl of places) {
@@ -2527,11 +2628,10 @@ export default function PlanetDemo() {
       mount.removeChild(audioPanel);
       mount.removeChild(mapCanvas);
       mount.removeChild(netLabel);
-      [placeHint, nearLabel, toastEl, menuBtn, menuPanel, helpEl, mapBackdrop, mapCtl, shareEl].forEach((el) => el.parentNode && el.parentNode.removeChild(el));
+      [placeHint, nearLabel, toastEl, menuBtn, menuPanel, helpEl, mapBackdrop, mapCtl, shareEl, missionsEl].forEach((el) => el.parentNode && el.parentNode.removeChild(el));
       mount.removeChild(greetBtn);
       window.removeEventListener("keydown", onGreetKey);
       disposed = true;
-      clearTimeout(netFallback);
       net.close();
       clearInterval(splashTimer);
       if (splash.parentNode) splash.parentNode.removeChild(splash);

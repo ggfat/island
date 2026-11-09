@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "relay": "node server/relay.js"
+    "relay": "node server/relay.js",
+    "relay:dev": "node server/relay.js --dev"
   },
   "dependencies": {
     "react": "^18.3.1",

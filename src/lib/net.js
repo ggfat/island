@@ -1,5 +1,6 @@
 // Client del relay. Se il server non c'e', il gioco resta in modalita' singola e riprova ogni pochi secondi.
-export function connectRelay({ url, onHello, onState, onWave, onLeave, onStatus }) {
+// `url` puo' essere una stringa o una funzione (valutata a ogni tentativo, cosi' dopo la creazione usa il codice stanza).
+export function connectRelay({ url, onHello, onState, onWave, onLeave, onStatus, onError }) {
   let ws = null, closed = false, retry = 0, timer = null;
   const api = {
     connected: false,
@@ -9,7 +10,7 @@ export function connectRelay({ url, onHello, onState, onWave, onLeave, onStatus 
   };
   function open() {
     if (closed) return;
-    try { ws = new WebSocket(url); } catch { schedule(); return; }
+    try { ws = new WebSocket(typeof url === "function" ? url() : url); } catch { schedule(); return; }
     ws.onopen = () => { retry = 0; api.connected = true; onStatus && onStatus(true); };
     ws.onmessage = (e) => {
       let m; try { m = JSON.parse(e.data); } catch { return; }
@@ -17,6 +18,7 @@ export function connectRelay({ url, onHello, onState, onWave, onLeave, onStatus 
       else if (m.t === "state") onState && onState(m);
       else if (m.t === "wave") onWave && onWave(m);
       else if (m.t === "leave") onLeave && onLeave(m);
+      else if (m.t === "error") { closed = true; clearTimeout(timer); onError && onError(m.why); }
     };
     ws.onclose = () => { api.connected = false; onStatus && onStatus(false); schedule(); };
     ws.onerror = () => {};

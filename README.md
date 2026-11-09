@@ -116,3 +116,13 @@ Per provarli da solo: apri il gioco con `?test=1` (simula un secondo giocatore).
 - Sinistra: muoviti · destra: guarda · 👋 / tasto G: saluta · ENTRA: entra nelle case (anche insieme ad altri giocatori).
 - Tocca la **minimappa** per ingrandirla (mostra tutto il pianeta, i luoghi speciali col nome e gli altri giocatori in azzurro).
 - ☰ → Aiuto, Invita amici (link alla stanza), Riconnetti, Esci. Tocca "offline" per riconnetterti.
+
+## Mondi (stanze) e missioni
+
+- Non esiste una stanza "main": chi entra per primo crea il proprio mondo (codice casuale di 8 caratteri) e invita gli altri col link `?room=CODICE`.
+- Massimo 6 giocatori per mondo (`ROOM_CAP`, tetto assoluto 12).
+- Un ospite può creare il proprio mondo solo dopo aver completato tutte le 6 missioni (menu ☰ → 🌍 Crea un nuovo mondo).
+- Missione = attivare un luogo speciale (servono 2 giocatori). Un luogo attivato resta attivo per sempre nel mondo e compare "Missione completata".
+- Stanza di sviluppo: `npm run relay:dev` e apri `?room=test` (disabilitata in produzione, o con `ALLOW_TEST_ROOM=1`).
+- Variabili relay: `PORT`, `ROOM_CAP`, `MAX_ROOMS`, `ALLOWED_ORIGIN`. Mondi vuoti recuperabili dall'host per 3 ore.
+- Limite noto: progresso e ruolo stanno in localStorage, il blocco "ospite non può creare" è solo lato client.
