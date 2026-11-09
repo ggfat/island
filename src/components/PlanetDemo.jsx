@@ -1531,12 +1531,14 @@ export default function PlanetDemo() {
     });
     const picker = document.createElement("div");
     Object.assign(picker.style, { display: "flex", flexWrap: "wrap", gap: "8px", justifyContent: "center", maxWidth: "340px", margin: "0 0 18px" });
+    const takenChars = new Set();
     const charChips = CHAR_NAMES.map((nm, i) => {
       const c = document.createElement("div");
       c.textContent = nm;
       Object.assign(c.style, { padding: "7px 13px", borderRadius: "18px", font: "600 13px system-ui, sans-serif", cursor: "pointer", userSelect: "none", touchAction: "none", border: "2px solid rgba(255,255,255,.7)" });
       c.addEventListener("pointerdown", (e) => {
         e.stopPropagation();
+        if (takenChars.has(i)) return;
         myChar = i; localCharIdx = i;
         try { localStorage.setItem("island_char", String(i)); } catch { /* ignora */ }
         paintChips();
@@ -1546,9 +1548,31 @@ export default function PlanetDemo() {
       return c;
     });
     function paintChips() {
-      charChips.forEach((c, i) => { c.style.background = i === myChar ? "#fff" : "rgba(255,255,255,.12)"; c.style.color = i === myChar ? "#2c4a52" : "#fff"; });
+      charChips.forEach((c, i) => {
+        const t = takenChars.has(i);
+        c.style.background = i === myChar ? "#fff" : "rgba(255,255,255,.12)"; c.style.color = i === myChar ? "#2c4a52" : "#fff";
+        c.style.opacity = t ? "0.4" : "1"; c.style.textDecoration = t ? "line-through" : "none"; c.style.cursor = t ? "not-allowed" : "pointer";
+        c.title = t ? "Gia' in uso in questo mondo" : "";
+      });
     }
     paintChips();
+    // personaggi gia' occupati nel mondo in cui stai per entrare
+    async function refreshTaken() {
+      if (disposed || splashGone || entry.mode !== "join" || !entry.code) { if (takenChars.size) { takenChars.clear(); paintChips(); } return; }
+      try {
+        const r = await fetch(relayUrl.replace(/^ws/, "http") + "/room/" + entry.code);
+        const j = await r.json();
+        takenChars.clear();
+        (j.taken || []).forEach((x) => takenChars.add(x));
+        if (takenChars.has(myChar)) {
+          const free = CHAR_NAMES.findIndex((_, k) => !takenChars.has(k));
+          if (free >= 0) { myChar = free; localCharIdx = free; getChar(free).then((g) => { if (myChar === free) setLocalChar(g, free); }); }
+        }
+        paintChips();
+      } catch { /* server non raggiungibile: nessun blocco */ }
+    }
+    setTimeout(refreshTaken, 0);
+    const takenTimer = setInterval(refreshTaken, 3000);
     splash.appendChild(barWrap);
     splash.appendChild(picker);
     splash.appendChild(enterBtn);
@@ -2682,6 +2706,7 @@ export default function PlanetDemo() {
       window.removeEventListener("keydown", onGreetKey);
       disposed = true;
       net.close();
+      clearInterval(takenTimer);
       clearInterval(splashTimer);
       if (splash.parentNode) splash.parentNode.removeChild(splash);
       window.removeEventListener("pointerdown", startAudio);

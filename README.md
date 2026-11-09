@@ -130,3 +130,5 @@ Per provarli da solo: apri il gioco con `?test=1` (simula un secondo giocatore).
 ## Personaggi
 
 Ogni giocatore del mondo ha un personaggio diverso (Anne, Henry, Mako, Capitan Barbarossa, Scheletro, Scheletro senza testa, Sharky), assegnato dal server con lo slot libero più basso. Oltre i 7 giocatori i modelli si ripetono con una tinta diversa.
+
+Il relay espone anche `GET /room/CODICE` (stessa porta, CORS aperto o `ALLOWED_ORIGIN`): restituisce `{exists, n, cap, taken:[slot]}`. La schermata iniziale lo interroga ogni 3 s e sbarra i personaggi già occupati.

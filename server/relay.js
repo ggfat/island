@@ -3,6 +3,7 @@
 // Avvio:  node server/relay.js            (produzione: la stanza "test" e' spenta)
 //         node server/relay.js --dev      (sviluppo: stanza "test" attiva, fino a 50 giocatori)
 // Variabili: PORT (8787), ROOM_CAP (7), ALLOWED_ORIGIN, MAX_ROOMS (300)
+import { createServer } from "node:http";
 import { WebSocketServer } from "ws";
 import { randomBytes } from "node:crypto";
 
@@ -27,8 +28,20 @@ function freeSlot(room, pref) {
 const rooms = new Map(); // codice -> { code, players, hostToken, cap, places:Set, nextTint, emptySince }
 let nextId = 1;
 
+// piccola API HTTP: GET /room/CODICE -> quali personaggi sono gia' occupati (serve alla schermata di scelta)
+const httpServer = createServer((req, res) => {
+  const cors = { "Access-Control-Allow-Origin": ALLOWED_ORIGIN || "*", "Content-Type": "application/json", "Cache-Control": "no-store" };
+  const m = /^\/room\/([a-z0-9]{1,12})$/i.exec((req.url || "").split("?")[0]);
+  if (!m) { res.writeHead(404, cors); return res.end("{}"); }
+  const room = rooms.get(m[1].toLowerCase());
+  if (!room) { res.writeHead(200, cors); return res.end(JSON.stringify({ exists: false, taken: [] })); }
+  res.writeHead(200, cors);
+  res.end(JSON.stringify({ exists: true, n: room.players.size, cap: room.cap, taken: [...room.players.values()].map((p) => p.c) }));
+});
+httpServer.listen(PORT);
+
 const wss = new WebSocketServer({
-  port: PORT,
+  server: httpServer,
   maxPayload: 1024,
   verifyClient: ({ origin }) => !ALLOWED_ORIGIN || origin === ALLOWED_ORIGIN,
 });
