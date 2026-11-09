@@ -2,14 +2,14 @@
 // Ogni "mondo" e' una stanza con codice casuale: la crea chi entra senza link, gli altri entrano con il link.
 // Avvio:  node server/relay.js            (produzione: la stanza "test" e' spenta)
 //         node server/relay.js --dev      (sviluppo: stanza "test" attiva, fino a 50 giocatori)
-// Variabili: PORT (8787), ROOM_CAP (6), ALLOWED_ORIGIN, MAX_ROOMS (300)
+// Variabili: PORT (8787), ROOM_CAP (7), ALLOWED_ORIGIN, MAX_ROOMS (300)
 import { WebSocketServer } from "ws";
 import { randomBytes } from "node:crypto";
 
 const PORT = Number(process.env.PORT) || 8787;
 const DEV = process.argv.includes("--dev") || process.env.ALLOW_TEST_ROOM === "1";
-const HARD_CAP = 12;
-const ROOM_CAP = Math.min(HARD_CAP, Math.max(2, Number(process.env.ROOM_CAP) || 6));
+const HARD_CAP = 7; // un personaggio diverso per ogni giocatore
+const ROOM_CAP = Math.min(HARD_CAP, Math.max(2, Number(process.env.ROOM_CAP) || 7));
 const TEST_CAP = 50;
 const MAX_ROOMS = Number(process.env.MAX_ROOMS) || 300;
 const TICK_MS = 100;
@@ -17,8 +17,9 @@ const STALE_MS = 15000;
 const EMPTY_ROOM_TTL_MS = 3 * 60 * 60 * 1000; // una stanza vuota resta ricreabile per 3 ore
 const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || null;
 
-function freeSlot(room) {
+function freeSlot(room, pref) {
   const used = new Set([...room.players.values()].map((p) => p.c));
+  if (Number.isInteger(pref) && pref >= 0 && pref < 7 && !used.has(pref)) return pref;
   let c = 0;
   while (used.has(c)) c++;
   return c;
@@ -55,6 +56,7 @@ wss.on("connection", (ws, req) => {
   const url = new URL(req.url, "http://x");
   const token = (url.searchParams.get("token") || "").slice(0, 64);
   const mode = url.searchParams.get("mode") === "create" ? "create" : "join";
+  const prefChar = parseInt(url.searchParams.get("char"), 10);
   const asHost = url.searchParams.get("host") === "1";
   let code = (url.searchParams.get("room") || "").toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 12);
   if (!/^[\w-]{8,64}$/.test(token)) return fail(ws, "token");
@@ -78,7 +80,7 @@ wss.on("connection", (ws, req) => {
 
   const id = nextId++;
   const isHost = room.hostToken === token;
-  const me = { id, ws, c: freeSlot(room), d: null, f: [0, 0, 1], j: 0, m: 0, i: 0, b: -1, rx: 0, rz: 0, rh: 0, seen: Date.now(), msgs: 0, winStart: Date.now() };
+  const me = { id, ws, c: freeSlot(room, prefChar), d: null, f: [0, 0, 1], j: 0, m: 0, i: 0, b: -1, rx: 0, rz: 0, rh: 0, seen: Date.now(), msgs: 0, winStart: Date.now() };
   room.players.set(id, me);
   room.emptySince = null;
   send(ws, { t: "hello", id, c: me.c, room: room.code, cap: room.cap, host: isHost });

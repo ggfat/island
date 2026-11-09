@@ -955,7 +955,10 @@ export default function PlanetDemo() {
       return model;
     }
     let localModel = null;
-    let localCharIdx = 0;
+    const CHAR_NAMES = ["Anne", "Henry", "Mako", "Barbarossa", "Scheletro", "Senza testa", "Sharky"];
+    let myChar = 0;
+    try { const v = parseInt(localStorage.getItem("island_char"), 10); if (v >= 0 && v < CHAR_PATHS.length) myChar = v; } catch { /* ignora */ }
+    let localCharIdx = myChar;
     const findWaveClip = (anims) => anims.find((c) => /wave/i.test(c.name)) ?? anims.find((c) => /^yes$/i.test(c.name));
     const procParts = [torsoGroup, headGroup, hipLeft, hipRight, shoulderLeft, shoulderRight];
     function setLocalChar(gltf, i) {
@@ -984,7 +987,7 @@ export default function PlanetDemo() {
     }
     let waveAction = null;
     let waveUntil = 0;
-    getChar(0).then((g) => { if (!localModel) setLocalChar(g, 0); });
+    getChar(myChar).then((g) => { if (!localModel) setLocalChar(g, myChar); });
 
     const blobMat = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.25 });
     const blob = new THREE.Mesh(new THREE.CircleGeometry(0.38, 16), blobMat);
@@ -1526,7 +1529,28 @@ export default function PlanetDemo() {
       display: "none", padding: "12px 38px", borderRadius: "30px", background: "#fff", color: "#2c4a52", fontWeight: "700",
       letterSpacing: "3px", cursor: "pointer", userSelect: "none", touchAction: "none",
     });
+    const picker = document.createElement("div");
+    Object.assign(picker.style, { display: "flex", flexWrap: "wrap", gap: "8px", justifyContent: "center", maxWidth: "340px", margin: "0 0 18px" });
+    const charChips = CHAR_NAMES.map((nm, i) => {
+      const c = document.createElement("div");
+      c.textContent = nm;
+      Object.assign(c.style, { padding: "7px 13px", borderRadius: "18px", font: "600 13px system-ui, sans-serif", cursor: "pointer", userSelect: "none", touchAction: "none", border: "2px solid rgba(255,255,255,.7)" });
+      c.addEventListener("pointerdown", (e) => {
+        e.stopPropagation();
+        myChar = i; localCharIdx = i;
+        try { localStorage.setItem("island_char", String(i)); } catch { /* ignora */ }
+        paintChips();
+        getChar(i).then((g) => { if (myChar === i) setLocalChar(g, i); });
+      });
+      picker.appendChild(c);
+      return c;
+    });
+    function paintChips() {
+      charChips.forEach((c, i) => { c.style.background = i === myChar ? "#fff" : "rgba(255,255,255,.12)"; c.style.color = i === myChar ? "#2c4a52" : "#fff"; });
+    }
+    paintChips();
     splash.appendChild(barWrap);
+    splash.appendChild(picker);
     splash.appendChild(enterBtn);
     mount.appendChild(splash);
     let splashGone = false;
@@ -1796,7 +1820,7 @@ export default function PlanetDemo() {
       netStarted = true;
       curMode = entry.mode; curCode = entry.code || null; curHost = !!entry.host;
       net = connectRelay({
-      url: () => `${relayUrl}/?room=${curCode || ""}&token=${myToken}&mode=${curMode}${curHost ? "&host=1" : ""}`,
+      url: () => `${relayUrl}/?room=${curCode || ""}&token=${myToken}&char=${myChar}&mode=${curMode}${curHost ? "&host=1" : ""}`,
       onError: (why) => {
         net.close();
         net = { connected: false, send() {}, close() {}, reconnect() {} };
@@ -1819,6 +1843,7 @@ export default function PlanetDemo() {
       },
       onHello: (m) => {
         myNetId = m.id;
+        if (typeof m.c === "number" && m.c !== myChar) toast("Il personaggio scelto era gia' in uso: sei " + CHAR_NAMES[m.c % CHAR_NAMES.length]);
         if (typeof m.c === "number" && m.c !== localCharIdx) { localCharIdx = m.c; getChar(m.c).then((g) => setLocalChar(g, m.c)); }
         roomName = m.room; curCode = m.room; curMode = "join"; roomCap = m.cap || 6;
         if (m.host) { curHost = true; role = role || "host"; store.set("island_role", role); store.set("island_myroom", m.room); myRoom = m.room; }

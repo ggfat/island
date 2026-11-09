@@ -120,7 +120,7 @@ Per provarli da solo: apri il gioco con `?test=1` (simula un secondo giocatore).
 ## Mondi (stanze) e missioni
 
 - Non esiste una stanza "main": chi entra per primo crea il proprio mondo (codice casuale di 8 caratteri) e invita gli altri col link `?room=CODICE`.
-- Massimo 6 giocatori per mondo (`ROOM_CAP`, tetto assoluto 12).
+- Massimo 7 giocatori per mondo (uno per personaggio; `ROOM_CAP`, tetto assoluto 7). Il personaggio si sceglie nella schermata iniziale; se è già in uso il server ne assegna uno libero.
 - Un ospite può creare il proprio mondo solo dopo aver completato tutte le 6 missioni (menu ☰ → 🌍 Crea un nuovo mondo).
 - Missione = attivare un luogo speciale (servono 2 giocatori). Un luogo attivato resta attivo per sempre nel mondo e compare "Missione completata".
 - Stanza di sviluppo: `npm run relay:dev` e apri `?room=test` (disabilitata in produzione, o con `ALLOW_TEST_ROOM=1`).
