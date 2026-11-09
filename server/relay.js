@@ -17,6 +17,12 @@ const STALE_MS = 15000;
 const EMPTY_ROOM_TTL_MS = 3 * 60 * 60 * 1000; // una stanza vuota resta ricreabile per 3 ore
 const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || null;
 
+function freeSlot(room) {
+  const used = new Set([...room.players.values()].map((p) => p.c));
+  let c = 0;
+  while (used.has(c)) c++;
+  return c;
+}
 const rooms = new Map(); // codice -> { code, players, hostToken, cap, places:Set, nextTint, emptySince }
 let nextId = 1;
 
@@ -72,7 +78,7 @@ wss.on("connection", (ws, req) => {
 
   const id = nextId++;
   const isHost = room.hostToken === token;
-  const me = { id, ws, c: room.nextTint++, d: null, f: [0, 0, 1], j: 0, m: 0, i: 0, b: -1, rx: 0, rz: 0, rh: 0, seen: Date.now(), msgs: 0, winStart: Date.now() };
+  const me = { id, ws, c: freeSlot(room), d: null, f: [0, 0, 1], j: 0, m: 0, i: 0, b: -1, rx: 0, rz: 0, rh: 0, seen: Date.now(), msgs: 0, winStart: Date.now() };
   room.players.set(id, me);
   room.emptySince = null;
   send(ws, { t: "hello", id, c: me.c, room: room.code, cap: room.cap, host: isHost });

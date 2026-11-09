@@ -126,3 +126,7 @@ Per provarli da solo: apri il gioco con `?test=1` (simula un secondo giocatore).
 - Stanza di sviluppo: `npm run relay:dev` e apri `?room=test` (disabilitata in produzione, o con `ALLOW_TEST_ROOM=1`).
 - Variabili relay: `PORT`, `ROOM_CAP`, `MAX_ROOMS`, `ALLOWED_ORIGIN`. Mondi vuoti recuperabili dall'host per 3 ore.
 - Limite noto: progresso e ruolo stanno in localStorage, il blocco "ospite non può creare" è solo lato client.
+
+## Personaggi
+
+Ogni giocatore del mondo ha un personaggio diverso (Anne, Henry, Mako, Capitan Barbarossa, Scheletro, Scheletro senza testa, Sharky), assegnato dal server con lo slot libero più basso. Oltre i 7 giocatori i modelli si ripetono con una tinta diversa.

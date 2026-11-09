@@ -925,24 +925,49 @@ export default function PlanetDemo() {
       else if (moving) setAnimAction(walkAction ?? idleAction);
       else setAnimAction(idleAction);
     }
-    let anneGltf = null;
-    let waveAction = null;
-    let waveUntil = 0;
+    // ---------- Personaggi diversi per ogni giocatore ----------
+    const CHAR_PATHS = ["Anne", "Henry", "Mako", "Captain_Barbarossa", "Skeleton", "Skeleton_Headless", "Sharky"].map((n) => `/models/characters/Characters_${n}.gltf`);
+    const charCache = new Map();
+    function getChar(i) {
+      const pth = CHAR_PATHS[((i % CHAR_PATHS.length) + CHAR_PATHS.length) % CHAR_PATHS.length];
+      if (!charCache.has(pth)) {
+        charCache.set(pth, loadModelT(pth).then((g) => {
+          if (g && !g.userData.fit) {
+            const bb = new THREE.Box3().setFromObject(g.scene);
+            const h = Math.max(0.5, bb.max.y - bb.min.y);
+            g.userData.fit = { sc: 1.7 / h, y: -bb.min.y * (1.7 / h) };
+          }
+          return g;
+        }));
+      }
+      return charCache.get(pth);
+    }
+    // tinta extra solo quando i giocatori superano i personaggi disponibili
+    const extraTint = (i) => Math.floor(i / CHAR_PATHS.length);
+    function dressModel(gltf, i, forClone) {
+      const model = forClone ? SkeletonUtils.clone(gltf.scene) : gltf.scene;
+      const f = gltf.userData.fit || { sc: 1, y: 0 };
+      // il gruppo del personaggio locale e' scalato 1.15
+      model.scale.setScalar(forClone ? f.sc : f.sc / 1.15);
+      model.position.y = forClone ? f.y : f.y / 1.15;
+      if (forClone || extraTint(i) > 0) applyPlayerTint(model, PLAYER_TINTS[extraTint(i) % PLAYER_TINTS.length], gradientMap);
+      model.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.frustumCulled = false; } });
+      return model;
+    }
+    let localModel = null;
+    let localCharIdx = 0;
     const findWaveClip = (anims) => anims.find((c) => /wave/i.test(c.name)) ?? anims.find((c) => /^yes$/i.test(c.name));
-    loadModelT("/models/characters/Characters_Anne.gltf").then((gltf) => {
-      if (!gltf) return;
-      anneGltf = gltf;
-      const model = gltf.scene;
-      const sc = 1.7 / (1.81 * 1.15);
-      model.scale.setScalar(sc);
-      model.position.y = 0.18 * sc;
-      model.traverse((o) => {
-        if (o.isMesh) o.castShadow = true;
-      });
+    const procParts = [torsoGroup, headGroup, hipLeft, hipRight, shoulderLeft, shoulderRight];
+    function setLocalChar(gltf, i) {
+      if (!gltf || disposed) return;
+      if (localModel) { character.remove(localModel); if (mixer) mixer.stopAllAction(); currentAnim = null; }
+      // il gltf originale e' unico per personaggio: lo uso direttamente solo se nessun altro lo sta usando
+      const model = dressModel(gltf, i, true);
+      localModel = model;
       character.add(model);
-      const procParts = [torsoGroup, headGroup, hipLeft, hipRight, shoulderLeft, shoulderRight];
       procParts.forEach((o) => (o.visible = false));
       quality.register(procParts, [model]);
+      mixer = null; idleAction = walkAction = jumpAction = waveAction = null;
       if (gltf.animations?.length) {
         mixer = new THREE.AnimationMixer(model);
         const find = (n) => gltf.animations.find((c) => c.name.toLowerCase() === n.toLowerCase());
@@ -956,7 +981,10 @@ export default function PlanetDemo() {
         waveAction = wv ? mixer.clipAction(wv) : null;
         setAnimAction(idleAction, 0);
       }
-    });
+    }
+    let waveAction = null;
+    let waveUntil = 0;
+    getChar(0).then((g) => { if (!localModel) setLocalChar(g, 0); });
 
     const blobMat = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.25 });
     const blob = new THREE.Mesh(new THREE.CircleGeometry(0.38, 16), blobMat);
@@ -1736,24 +1764,19 @@ export default function PlanetDemo() {
     function addRemote(id, tintIdx) {
       const root = new THREE.Group();
       const r = { root, mixer: null, idle: null, walk: null, jumpA: null, waveA: null, cur: null, curDir: null, tgtDir: new THREE.Vector3(), facing: new THREE.Vector3(0, 0, 1), jump: 0, moving: false, inside: false, bubble: makeBubble(), waveUntil: 0, b: -1, rh: 0, ip: new THREE.Vector3(), ipT: new THREE.Vector3(), ipInit: false };
-      if (anneGltf) {
-        const model = SkeletonUtils.clone(anneGltf.scene);
-        applyPlayerTint(model, PLAYER_TINTS[tintIdx % PLAYER_TINTS.length], gradientMap);
-        model.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.frustumCulled = false; } });
+      getChar(tintIdx).then((gltf) => {
+        if (!gltf || !remotes.has(id)) return;
+        const model = dressModel(gltf, tintIdx, true);
         root.add(model);
-        if (anneGltf.animations?.length) {
+        if (gltf.animations?.length) {
           r.mixer = new THREE.AnimationMixer(model);
-          const find = (n) => anneGltf.animations.find((c) => c.name.toLowerCase() === n.toLowerCase());
-          const idle = find("Idle") ?? anneGltf.animations[0], walk = find("Walk"), jmp = find("Jump_Idle") ?? find("Jump"), wv = findWaveClip(anneGltf.animations);
+          const find = (n) => gltf.animations.find((c) => c.name.toLowerCase() === n.toLowerCase());
+          const idle = find("Idle") ?? gltf.animations[0], walk = find("Walk"), jmp = find("Jump_Idle") ?? find("Jump"), wv = findWaveClip(gltf.animations);
           r.idle = idle ? r.mixer.clipAction(idle) : null; r.walk = walk ? r.mixer.clipAction(walk) : null;
           r.jumpA = jmp ? r.mixer.clipAction(jmp) : null; r.waveA = wv ? r.mixer.clipAction(wv) : null;
           r.cur = r.idle; if (r.cur) r.cur.play();
         }
-      } else {
-        const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.35, 0.9, 4, 8), new THREE.MeshToonMaterial({ color: PLAYER_TINTS[tintIdx % PLAYER_TINTS.length], gradientMap }));
-        body.position.y = 0.9;
-        root.add(body);
-      }
+      });
       root.add(r.bubble);
       root.visible = false;
       scene.add(root);
@@ -1796,6 +1819,7 @@ export default function PlanetDemo() {
       },
       onHello: (m) => {
         myNetId = m.id;
+        if (typeof m.c === "number" && m.c !== localCharIdx) { localCharIdx = m.c; getChar(m.c).then((g) => setLocalChar(g, m.c)); }
         roomName = m.room; curCode = m.room; curMode = "join"; roomCap = m.cap || 6;
         if (m.host) { curHost = true; role = role || "host"; store.set("island_role", role); store.set("island_myroom", m.room); myRoom = m.room; }
         else if (!role) { role = "guest"; store.set("island_role", "guest"); }
