@@ -141,3 +141,10 @@ La forma del pianeta (mari, montagne, colline, posizione di alberi, villaggi e l
 
 - Menu ☰ → 🖥️ Grafica: Auto (predefinito), Alta, Media, Bassa, Minima. In Auto il gioco misura la fluidità ogni ~3 s e scende di livello sotto i 27 fps (risolve risoluzione, ombre, cespugli); ricorda il livello scelto. I modelli veri restano sempre.
 - Interni arredati con il Fantasy Props MegaKit di Quaternius (CC0), in `public/models/props/` (solo texture di colore, ridotte a 512 px). Dentro una casa il mondo esterno viene nascosto.
+## Biomi (branch `bioma-alieno`)
+
+- Il primo carattere del codice del mondo decide il bioma: temperato (pirati, case di legno) o pianeta alieno (Ultimate Space Kit di Quaternius, CC0, in `public/models/space/`).
+- Pianeta alieno: 5 personaggi (4 astronauti + l'alieno Zorp, stesso scheletro dei pirati, armi nascoste), alberi/rocce/piante aliene, case spaziali con impronte proprie, cielo rosa-viola e mare viola. Limite 5 giocatori (anche lato relay).
+- Completate le 6 missioni, "Crea un nuovo mondo" crea un pianeta alieno.
+- Per provarlo: `/?biome=alieno` crea direttamente un mondo alieno; `/?test=1&biome=alieno` da solo con il compagno simulato.
+- Limiti: interni delle case ancora di legno; con la grafica ridotta (telefoni lenti) compaiono le sagome procedurali del bioma temperato.

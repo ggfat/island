@@ -111,6 +111,45 @@ function mulberry32(a) {
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
+// ---------- Biomi: il primo carattere del codice del mondo decide il tipo di pianeta ----------
+const BIOME_LIST = ["temperate", "alien"];
+function biomeOf(code) {
+  if (!code) return "temperate";
+  const i = WORLD_ALPHABET.indexOf(code[0]);
+  return i < 0 ? "temperate" : BIOME_LIST[i % BIOME_LIST.length];
+}
+const SP = (n) => `/models/space/${n}.gltf`;
+const BIOMES = {
+  temperate: {
+    palette: { sand: "#c9b98f", grass: "#7c8b6f", rock: "#8c8880", snow: "#eef1ee", trunk: "#5c4b3a", foliage: "#4f6b52" },
+    sea: "#4f86a0", seaShallow: "#79bcc6", seaDeep: "#2f6d8c", seaFoam: "#eef7f4", skyTop: "#5f9fc7", skyHorizon: "#dce9e6", fog: "#bcd6d8", fogTint: "#ffffff",
+    chars: ["Anne", "Henry", "Mako", "Captain_Barbarossa", "Skeleton", "Skeleton_Headless", "Sharky"].map((n) => `/models/characters/Characters_${n}.gltf`),
+    charNames: ["Anne", "Henry", "Mako", "Barbarossa", "Scheletro", "Senza testa", "Sharky"],
+    trees: ["/models/nature/CommonTree_2.gltf", "/models/nature/Pine_1.gltf"],
+    rocks: ["/models/nature/Rock_Medium_1.gltf", "/models/nature/Rock_Medium_3.gltf"],
+    bushes: ["/models/nature/Bush_Common.gltf"],
+    houses: null,
+  },
+  alien: {
+    palette: { sand: "#d9bfd0", grass: "#5f8a93", rock: "#7d6f93", snow: "#eae6ff", trunk: "#4a3a5c", foliage: "#3f7f86" },
+    sea: "#8a62c4", seaShallow: "#c49be8", seaDeep: "#4a2a86", seaFoam: "#f6e8ff", skyTop: "#6d4fa0", skyHorizon: "#f3c9dc", fog: "#d8b8d6", fogTint: "#f6dcea",
+    chars: ["Astronaut_FinnTheFrog", "Astronaut_BarbaraTheBee", "Astronaut_FernandoTheFlamingo", "Astronaut_RaeTheRedPanda", "Enemy_Large"].map(SP),
+    charNames: ["Finn", "Barbara", "Fernando", "Rae", "Zorp"],
+    trees: ["Tree_Blob_1", "Tree_Spikes_1", "Tree_Lava_1", "Tree_Floating_1", "Tree_Swirl_1", "Tree_Light_1"].map(SP),
+    rocks: ["Rock_1", "Rock_2", "Rock_3"].map(SP),
+    bushes: ["Bush_2", "Plant_1", "Plant_2"].map(SP),
+    // per ogni tipo di edificio (long, tower, ship): modello e rotazione per allineare la porta
+    // modelli con la porta sul lato +Z; le impronte (collisioni, porta) seguono le misure dei modelli
+    houses: [{ path: SP("House_Long"), rotY: 0 }, { path: SP("House_Single"), rotY: 0 }, { path: SP("House_Open"), rotY: 0 }],
+    buildingTypes: [
+      { name: "long", x0: -2.0, x1: 2.0, z0: -5.98, z1: 1.81, h: 4.3, roofH: 1.2, roomKey: "large" },
+      { name: "tower", x0: -2.0, x1: 2.0, z0: -2.0, z1: 1.81, h: 4.3, roofH: 1.2, roomKey: "small" },
+      { name: "ship", x0: -2.0, x1: 2.0, z0: -1.81, z1: 1.81, h: 4.3, roofH: 1.2, roomKey: "medium" },
+    ],
+  },
+};
+// altezze di riferimento dei nostri modelli: i modelli di altri biomi vengono portati alla stessa misura
+const DECOR_TARGET_H = { tree: 7.5, rock: 2.3, bush: 1.6 };
 const LEGACY_WORLD = { NOISE_WAVES, SEA_CENTERS, MOUNTAINS, HILLS };
 function configureWorld(code) {
   TERRAIN_PADS = [];
@@ -200,8 +239,14 @@ export default function PlanetDemo() {
     try { wcMissions = JSON.parse(wcGet("island_missions") || "[]").length; } catch { /* ignora */ }
     const wcCanCreate = wcGet("island_role") !== "guest" || wcMissions >= 6;
     const wcNewCode = () => Array.from(crypto.getRandomValues(new Uint8Array(8)), (b) => WORLD_ALPHABET[b % WORLD_ALPHABET.length]).join("");
-    const worldCode = wcUrlRoom || (wcTest ? null : wcGet("island_myroom")) || (!wcTest && wcCanCreate ? wcNewCode() : null);
+    // ?biome=alieno: chi crea un mondo nuovo sceglie il pianeta alieno (in test vale anche da solo)
+    const wcWantAlien = wcParams.get("biome") === "alieno";
+    const wcCodeFor = (biome) => { for (let i = 0; i < 200; i++) { const c = wcNewCode(); if (biomeOf(c) === biome) return c; } return wcNewCode(); };
+    const wcSaved = wcTest || wcWantAlien ? null : wcGet("island_myroom");
+    const worldCode = wcUrlRoom || wcSaved || (!wcTest && wcCanCreate ? wcCodeFor(wcWantAlien ? "alien" : "temperate") : null);
     configureWorld(worldCode);
+    const biomeKey = !worldCode && wcTest && wcWantAlien ? "alien" : biomeOf(worldCode);
+    const BIOME = BIOMES[biomeKey];
 
     const mount = mountRef.current;
     const width = mount.clientWidth;
@@ -215,7 +260,7 @@ export default function PlanetDemo() {
     mount.appendChild(renderer.domElement);
 
     const scene = new THREE.Scene();
-    scene.fog = new THREE.Fog("#bcd6d8", PLANET_R * 2.4, PLANET_R * 6.5);
+    scene.fog = new THREE.Fog(BIOME.fog, PLANET_R * 2.4, PLANET_R * 6.5);
 
     const camera = new THREE.PerspectiveCamera(52, width / height, 0.1, PLANET_R * 40);
     const gradientMap = makeToonGradient();
@@ -224,8 +269,8 @@ export default function PlanetDemo() {
     const skyGeo = new THREE.SphereGeometry(PLANET_R * 18, 24, 16);
     const skyPos = skyGeo.attributes.position;
     const skyColors = [];
-    const skyTop = new THREE.Color("#5f9fc7");
-    const skyHorizon = new THREE.Color("#dce9e6");
+    const skyTop = new THREE.Color(BIOME.skyTop);
+    const skyHorizon = new THREE.Color(BIOME.skyHorizon);
     for (let i = 0; i < skyPos.count; i++) {
       const y = skyPos.getY(i);
       const t = smoothstep(-PLANET_R * 2, PLANET_R * 10, y);
@@ -233,6 +278,7 @@ export default function PlanetDemo() {
       skyColors.push(c.r, c.g, c.b);
     }
     skyGeo.setAttribute("color", new THREE.Float32BufferAttribute(skyColors, 3));
+    const fogTintC = new THREE.Color(BIOME.fogTint);
     const skyMat = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide, fog: false });
     scene.add(new THREE.Mesh(skyGeo, skyMat));
 
@@ -256,7 +302,7 @@ export default function PlanetDemo() {
 
     // ---------- Planet: an icosahedron displaced by seamless noise, so it reads ----------
     // as a small rocky/grassy world you can walk all the way around
-    const PALETTE = { sand: "#c9b98f", grass: "#7c8b6f", rock: "#8c8880", snow: "#eef1ee", trunk: "#5c4b3a", foliage: "#4f6b52" };
+    const PALETTE = BIOME.palette;
     const sandC = new THREE.Color(PALETTE.sand);
     const grassC = new THREE.Color(PALETTE.grass);
     const rockC = new THREE.Color(PALETTE.rock);
@@ -375,9 +421,9 @@ export default function PlanetDemo() {
 
     // ---------- Sea: a translucent sphere at sea level — land pokes above it, low areas sit under it ----------
     // Mare opaco solo dove serve: colore per profondita' (riva chiara, largo scuro), schiuma sulla riva, onde leggere.
-    const seaShallow = new THREE.Color("#79bcc6");
-    const seaDeep = new THREE.Color("#2f6d8c");
-    const seaFoam = new THREE.Color("#eef7f4");
+    const seaShallow = new THREE.Color(BIOME.seaShallow);
+    const seaDeep = new THREE.Color(BIOME.seaDeep);
+    const seaFoam = new THREE.Color(BIOME.seaFoam);
     const seaSrc = new THREE.IcosahedronGeometry(PLANET_R + SEA_LEVEL, 48);
     const sp = seaSrc.attributes.position;
     const seaPos = [];
@@ -621,9 +667,21 @@ export default function PlanetDemo() {
     quality.apply(quality.mode === "auto" ? Number(qGet("island_quality_auto") || 0) : Number(quality.mode));
 
     // ---------- Real models (trees, rocks, bushes) swapped in once loaded; stand-ins stay as fallback ----------
+    // porta un modello all'altezza dei nostri (serve per i set di altri biomi)
+    function normalizeHeight(gltf, targetH) {
+      const box = new THREE.Box3().setFromObject(gltf.scene);
+      const h = box.max.y - box.min.y;
+      if (!(h > 0.01) || Math.abs(h - targetH) / targetH < 0.15) return gltf;
+      const wrap = new THREE.Group();
+      const inner = gltf.scene.clone();
+      inner.scale.multiplyScalar(targetH / h);
+      inner.position.y -= box.min.y * (targetH / h);
+      wrap.add(inner);
+      return { ...gltf, scene: wrap };
+    }
     function swapInReal(kind, paths) {
       Promise.all(paths.map((pth) => loadModelT(pth))).then((models) => {
-        const variants = models.filter(Boolean);
+        const variants = models.filter(Boolean).map((g) => (biomeKey === "temperate" ? g : normalizeHeight(g, DECOR_TARGET_H[kind])));
         if (variants.length === 0 || decor[kind].length === 0) return;
         const realMeshes = [];
         variants.forEach((gltf, vIdx) => {
@@ -639,9 +697,9 @@ export default function PlanetDemo() {
         quality.register(procObjs, realMeshes);
       });
     }
-    swapInReal("tree", ["/models/nature/CommonTree_2.gltf", "/models/nature/Pine_1.gltf"]);
-    swapInReal("rock", ["/models/nature/Rock_Medium_1.gltf", "/models/nature/Rock_Medium_3.gltf"]);
-    swapInReal("bush", ["/models/nature/Bush_Common.gltf"]);
+    swapInReal("tree", BIOME.trees);
+    swapInReal("rock", BIOME.rocks);
+    swapInReal("bush", BIOME.bushes);
 
     // ---------- Ambient wildlife ----------
     // birds: orbit the planet at a fixed altitude around a random fixed axis —
@@ -756,11 +814,11 @@ export default function PlanetDemo() {
     // ground foundation and the door position are identical whether the real model or the stand-in
     // is shown. The door is always on the local +Z face, at x = 0.
     const HS = 0.94;
-    const BUILDING_TYPES = [
+    const BUILDING_TYPES = (BIOME.buildingTypes || [
       { name: "long", x0: -4.6, x1: 4.65, z0: -2.3, z1: 2.3, h: 4.4, roofH: 2.2, roomKey: "large" },
       { name: "tower", x0: -1.7, x1: 1.7, z0: -2.05, z1: 1.3, h: 6.6, roofH: 2.6, roomKey: "small" },
       { name: "ship", x0: -2.8, x1: 2.8, z0: -1.57, z1: 1.57, h: 5.2, roofH: 1.8, roomKey: "medium" },
-    ].map((t) => ({ ...t, x0: t.x0 * HS, x1: t.x1 * HS, z0: t.z0 * HS, z1: t.z1 * HS, h: t.h * HS, roofH: t.roofH * HS }));
+    ]).map((t) => ({ ...t, x0: t.x0 * HS, x1: t.x1 * HS, z0: t.z0 * HS, z1: t.z1 * HS, h: t.h * HS, roofH: t.roofH * HS }));
     const DOOR_H = 2.0;
     const wallMats = [
       new THREE.MeshToonMaterial({ color: "#8a6a4a", gradientMap }),
@@ -961,7 +1019,22 @@ export default function PlanetDemo() {
     // ---------- Real houses (Pirate kit), swapped in once loaded; the stand-ins stay as fallback ----------
     // The foundation under each house stays visible in both cases.
     const HOUSE_PATHS = ["/models/buildings/Environment_House1.gltf", "/models/buildings/Environment_House2.gltf", "/models/buildings/Environment_House3.gltf"];
-    Promise.all(HOUSE_PATHS.map((pth) => loadModelT(pth))).then((models) => {
+    // in altri biomi il modello viene adattato all'impronta del tipo di edificio (collisioni e porta restano uguali)
+    function fitToFootprint(gltf, T, rotY) {
+      const wrap = new THREE.Group();
+      const inner = gltf.scene.clone();
+      inner.rotation.y = rotY;
+      wrap.add(inner);
+      wrap.updateMatrixWorld(true);
+      const box = new THREE.Box3().setFromObject(wrap);
+      const k = Math.min((T.x1 - T.x0) / (box.max.x - box.min.x), (T.z1 - T.z0) / (box.max.z - box.min.z)) / HS;
+      inner.scale.multiplyScalar(k);
+      inner.position.set(-((box.min.x + box.max.x) / 2) * k + (T.x0 + T.x1) / 2 / HS, -box.min.y * k, -((box.min.z + box.max.z) / 2) * k + (T.z0 + T.z1) / 2 / HS);
+      return { ...gltf, scene: wrap };
+    }
+    const housePaths = BIOME.houses ? BIOME.houses.map((h) => h.path) : HOUSE_PATHS;
+    Promise.all(housePaths.map((pth) => loadModelT(pth))).then((loaded) => {
+      const models = BIOME.houses ? loaded.map((g, i) => g && fitToFootprint(g, BUILDING_TYPES[i], BIOME.houses[i].rotY)) : loaded;
       const realMeshes = [];
       const standIns = [];
       models.forEach((gltf, typeIdx) => {
@@ -1224,14 +1297,15 @@ export default function PlanetDemo() {
       else setAnimAction(idleAction);
     }
     // ---------- Personaggi diversi per ogni giocatore ----------
-    const CHAR_PATHS = ["Anne", "Henry", "Mako", "Captain_Barbarossa", "Skeleton", "Skeleton_Headless", "Sharky"].map((n) => `/models/characters/Characters_${n}.gltf`);
+    const CHAR_PATHS = BIOME.chars;
     const charCache = new Map();
     function getChar(i) {
       const pth = CHAR_PATHS[((i % CHAR_PATHS.length) + CHAR_PATHS.length) % CHAR_PATHS.length];
       if (!charCache.has(pth)) {
         charCache.set(pth, loadModelT(pth).then((g) => {
           if (g && !g.userData.fit) {
-            const bb = new THREE.Box3().setFromObject(g.scene);
+            g.scene.updateMatrixWorld(true);
+            const bb = new THREE.Box3().setFromObject(g.scene, true);
             const h = Math.max(0.5, bb.max.y - bb.min.y);
             g.userData.fit = { sc: 1.7 / h, y: -bb.min.y * (1.7 / h) };
           }
@@ -1249,11 +1323,14 @@ export default function PlanetDemo() {
       model.scale.setScalar(forClone ? f.sc : f.sc / 1.15);
       model.position.y = forClone ? f.y : f.y / 1.15;
       if (forClone || extraTint(i) > 0) applyPlayerTint(model, PLAYER_TINTS[extraTint(i) % PLAYER_TINTS.length], gradientMap);
-      model.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.frustumCulled = false; } });
+      model.traverse((o) => {
+        if (/pistol|gun|weapon|rifle/i.test(o.name)) o.visible = false; // gli astronauti hanno un'arma: il gioco e' pacifico
+        if (o.isMesh) { o.castShadow = true; o.frustumCulled = false; }
+      });
       return model;
     }
     let localModel = null;
-    const CHAR_NAMES = ["Anne", "Henry", "Mako", "Barbarossa", "Scheletro", "Senza testa", "Sharky"];
+    const CHAR_NAMES = BIOME.charNames;
     let myChar = 0;
     try { const v = parseInt(localStorage.getItem("island_char"), 10); if (v >= 0 && v < CHAR_PATHS.length) myChar = v; } catch { /* ignora */ }
     let localCharIdx = myChar;
@@ -2469,7 +2546,8 @@ export default function PlanetDemo() {
       if (!canCreate()) { toast("Completa tutte le missioni per creare il tuo mondo (" + missionsDone.size + "/" + TOTAL_MISSIONS + ")."); return; }
       if (!window.confirm("Creare un nuovo mondo? Quello attuale resta raggiungibile solo con il suo link.")) return;
       store.del("island_myroom");
-      location.href = location.pathname;
+      // livello successivo: completate le missioni, il nuovo mondo e' un pianeta alieno
+      location.href = location.pathname + (missionsDone.size >= TOTAL_MISSIONS ? "?biome=alieno" : "");
     });
     menuItem("\u{1F504} Riconnetti", () => {
       if (net.connected) { toast("Sei gia' online"); return; }
@@ -2660,6 +2738,14 @@ export default function PlanetDemo() {
       camPitch = pitch;
       snapOutCam = true;
     };
+    if (TEST_PARTNER) window.__tpBuilding = (i) => {
+      const b = buildings.find((x) => x.typeIdx === i % 3 && buildings.indexOf(x) >= Math.floor(i / 3));
+      if (!b) return 0;
+      charDir = b.g.localToWorld(new THREE.Vector3(0, 0, b.T.z1 + 7)).normalize();
+      const toDoor = b.doorWorld.clone().normalize().sub(charDir);
+      facing.copy(toDoor.addScaledVector(charDir, -toDoor.dot(charDir)).normalize());
+      return buildings.length;
+    };
     if (TEST_PARTNER) window.__tpPlace = (i) => { const pl = places[i]; if (!pl) return places.length; charDir = pl.dir.clone().addScaledVector(facing, -0.02).normalize(); return places.length; };
     const placeHint = document.createElement("div");
     Object.assign(placeHint.style, { position: "absolute", bottom: "34px", left: "50%", transform: "translateX(-50%)", font: "14px system-ui, sans-serif", color: "#fff", background: "rgba(35,40,38,0.55)", padding: "7px 16px", borderRadius: "16px", zIndex: 22, pointerEvents: "none", opacity: "0", transition: "opacity .3s", whiteSpace: "nowrap" });
@@ -2808,7 +2894,7 @@ export default function PlanetDemo() {
       hemi.intensity = 1.0 + dayFactor * 0.1;
       hemi.color.set("#98a6d6").lerp(dayColorTmp.set("#dfe8e6"), dayFactor);
       skyMat.color.set("#6f80ae").lerp(dayColorTmp.set("#ffffff"), dayFactor).lerp(duskColorTmp.set("#ffb27a"), duskFactor * 0.45);
-      scene.fog.color.copy(skyMat.color);
+      scene.fog.color.copy(skyMat.color).multiply(fogTintC);
 
       // ---------- Clouds: orbit slowly around their own random axis ----------
       clouds.forEach((c) => {

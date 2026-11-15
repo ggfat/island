@@ -59,7 +59,15 @@ function newCode() {
     if (!rooms.has(c)) return c;
   }
 }
+// stesso calcolo del client: il primo carattere del codice decide il bioma; il pianeta alieno ha 5 personaggi
+const WORLD_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789";
+const BIOME_CAPS = [7, 5];
+function biomeCap(code) {
+  const i = WORLD_ALPHABET.indexOf(code[0]);
+  return i < 0 || code === "test" ? 99 : BIOME_CAPS[i % BIOME_CAPS.length];
+}
 function makeRoom(code, hostToken, cap) {
+  cap = Math.min(cap, biomeCap(code));
   const r = { code, players: new Map(), hostToken, cap, places: new Set(), nextTint: 0, emptySince: null };
   rooms.set(code, r);
   return r;
