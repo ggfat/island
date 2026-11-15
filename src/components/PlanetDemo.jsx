@@ -130,11 +130,22 @@ function configureWorld(code) {
   MOUNTAINS = [[0.58, 8.0], [0.52, 7.0], [0.5, 6.2], [0.4, 5.0]].map(([r, h]) => ({ c: pick(r * 0.7 + 0.2, seaAvoid), r, h }));
   HILLS = [{ v: rv(), f: 7.5, p: R() * 6.28 }, { v: rv(), f: 9.1, p: R() * 6.28 }];
 }
+// Superficie del mare piu' piatta del pianeta: verso il centro di ogni mare scende un po',
+// cosi' su un pianeta piccolo il mare non sembra una cupola. A riva coincide con SEA_LEVEL.
+const SEA_FLAT = 0.6;
+function seaSurfaceH(dir) {
+  let drop = 0;
+  for (const c of SEA_CENTERS) {
+    const a = dir.angleTo(c);
+    if (a < SEA_RADIUS) drop = Math.max(drop, SEA_FLAT * PLANET_R * (SEA_RADIUS * SEA_RADIUS - a * a) * 0.5);
+  }
+  return SEA_LEVEL - drop;
+}
 function terrainHeight(dir) {
   const noise = noiseAt(dir);
   const mask = seaMask(dir);
   const landH = noise * 0.55 + 1.0 + hillsAt(dir) + mountainAt(dir); // colline e montagne vere
-  const seaH = noise * 0.3 - 2.2; // genuinely deep water inside the two sea regions
+  const seaH = noise * 0.3 - 7.0; // fondale profondo: la superficie del mare scende verso il centro
   return landH * (1 - mask) + seaH * mask;
 }
 
@@ -280,8 +291,53 @@ export default function PlanetDemo() {
     }
 
     // ---------- Sea: a translucent sphere at sea level — land pokes above it, low areas sit under it ----------
-    const seaMat = new THREE.MeshToonMaterial({ color: "#4f86a0", gradientMap, transparent: true, opacity: 0.82 });
-    const sea = new THREE.Mesh(new THREE.SphereGeometry(PLANET_R + SEA_LEVEL, 160, 110), seaMat);
+    // Mare opaco solo dove serve: colore per profondita' (riva chiara, largo scuro), schiuma sulla riva, onde leggere.
+    const seaShallow = new THREE.Color("#79bcc6");
+    const seaDeep = new THREE.Color("#2f6d8c");
+    const seaFoam = new THREE.Color("#eef7f4");
+    const seaSrc = new THREE.IcosahedronGeometry(PLANET_R + SEA_LEVEL, 48);
+    const sp = seaSrc.attributes.position;
+    const seaPos = [];
+    const seaCol = [];
+    const sv = new THREE.Vector3();
+    const vDepth = new Float32Array(3);
+    const vDir = [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()];
+    for (let i = 0; i < sp.count; i += 3) {
+      let wet = false;
+      for (let k = 0; k < 3; k++) {
+        vDir[k].set(sp.getX(i + k), sp.getY(i + k), sp.getZ(i + k)).normalize();
+        vDepth[k] = seaSurfaceH(vDir[k]) - terrainHeight(vDir[k]);
+        if (vDepth[k] > -0.25) wet = true;
+      }
+      if (!wet) continue; // triangolo completamente sotto la terra: non serve
+      for (let k = 0; k < 3; k++) {
+        const r = PLANET_R + seaSurfaceH(vDir[k]);
+        seaPos.push(vDir[k].x * r, vDir[k].y * r, vDir[k].z * r);
+        const d = vDepth[k];
+        if (d < 0.3) sv.set(seaFoam.r, seaFoam.g, seaFoam.b);
+        else { const c = seaShallow.clone().lerp(seaDeep, smoothstep(0.3, 3.0, d)); sv.set(c.r, c.g, c.b); }
+        seaCol.push(sv.x, sv.y, sv.z);
+      }
+    }
+    seaSrc.dispose();
+    const seaGeo = new THREE.BufferGeometry();
+    seaGeo.setAttribute("position", new THREE.Float32BufferAttribute(seaPos, 3));
+    seaGeo.setAttribute("color", new THREE.Float32BufferAttribute(seaCol, 3));
+    seaGeo.computeVertexNormals();
+    const seaUniforms = { uTime: { value: 0 } };
+    const seaMat = new THREE.MeshToonMaterial({ vertexColors: true, gradientMap });
+    seaMat.onBeforeCompile = (sh) => {
+      sh.uniforms.uTime = seaUniforms.uTime;
+      sh.vertexShader = "uniform float uTime;\n" + sh.vertexShader.replace(
+        "#include <begin_vertex>",
+        `#include <begin_vertex>
+        float wv = sin(dot(position, vec3(0.9, 0.4, 0.7)) * 1.3 + uTime * 1.1) * 0.5 + sin(dot(position, vec3(-0.5, 0.8, 0.3)) * 2.1 - uTime * 1.5) * 0.5;
+        transformed += normalize(position) * wv * 0.05;
+        vColor.rgb += vec3(0.05) * smoothstep(0.6, 1.0, wv);`
+      );
+    };
+    const sea = new THREE.Mesh(seaGeo, seaMat);
+    sea.receiveShadow = true;
     scene.add(sea);
 
     // ---------- Clouds: small fluffy low-poly clusters drifting around the planet ----------
@@ -1251,7 +1307,7 @@ export default function PlanetDemo() {
     const MOVE_SPEED = 6.5;
 
     function groundRadiusAt(d) {
-      return PLANET_R + Math.max(terrainHeight(d), SEA_LEVEL);
+      return PLANET_R + Math.max(terrainHeight(d), seaSurfaceH(d));
     }
 
     // ---------- Input: virtual joystick + jump button (camera is automatic, no drag) ----------
@@ -1754,7 +1810,7 @@ export default function PlanetDemo() {
           mpD.copy(charDir).multiplyScalar(Math.cos(ang)).addScaledVector(mpR, px * k).addScaledVector(facing, -py * k).normalize();
           const h = terrainHeight(mpD);
           let c;
-          if (h <= SEA_LEVEL + 0.15) c = [70, 130, 168];
+          if (h <= seaSurfaceH(mpD) + 0.15) c = [70, 130, 168];
           else if (h < SEA_LEVEL + 0.9) c = [226, 208, 150];
           else if (h > 5.8) c = [240, 240, 244];
           else if (h > 3.6) c = [128, 126, 122];
@@ -2310,6 +2366,24 @@ export default function PlanetDemo() {
       }
     }
     if (TEST_PARTNER) window.__info = () => ({ villages: VILLAGES.length, buildings: buildings.length, trees: decor.tree.length, places: places.length });
+    // test: mi porto sulla riva del mare i, guardando verso il largo (k = direzione di uscita)
+    if (TEST_PARTNER) window.__tpSea = (i, k = 0, back = 4) => {
+      const c = SEA_CENTERS[i % SEA_CENTERS.length];
+      const ref = Math.abs(c.y) < 0.9 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
+      const t = new THREE.Vector3().crossVectors(ref, c).normalize().applyAxisAngle(c, k);
+      const axis = new THREE.Vector3().crossVectors(c, t).normalize();
+      let d = c.clone();
+      for (let a = 0; a < 1.5; a += 0.004) {
+        d = c.clone().applyAxisAngle(axis, a);
+        if (terrainHeight(d) > seaSurfaceH(d) + 0.3) break;
+      }
+      const land = d.clone().applyAxisAngle(axis, back / PLANET_R);
+      charDir = land.normalize();
+      const toSea = c.clone().sub(charDir);
+      facing.copy(toSea.addScaledVector(charDir, -toSea.dot(charDir)).normalize());
+      snapOutCam = true;
+    };
+    if (TEST_PARTNER) window.__dbg = () => ({ t: terrainHeight(charDir), s: seaSurfaceH(charDir), seaTris: seaGeo.attributes.position.count / 3, cam: camera.position.length() - PLANET_R, ch: character.position.length() - PLANET_R });
     if (TEST_PARTNER) window.__tpPlace = (i) => { const pl = places[i]; if (!pl) return places.length; charDir = pl.dir.clone().addScaledVector(facing, -0.02).normalize(); return places.length; };
     const placeHint = document.createElement("div");
     Object.assign(placeHint.style, { position: "absolute", bottom: "34px", left: "50%", transform: "translateX(-50%)", font: "14px system-ui, sans-serif", color: "#fff", background: "rgba(35,40,38,0.55)", padding: "7px 16px", borderRadius: "16px", zIndex: 22, pointerEvents: "none", opacity: "0", transition: "opacity .3s", whiteSpace: "nowrap" });
@@ -2427,6 +2501,7 @@ export default function PlanetDemo() {
       raf = requestAnimationFrame(animate);
       const dt = Math.min(0.05, clock.getDelta());
       const t = clock.elapsedTime;
+      seaUniforms.uTime.value = t;
       quality.sample(dt, t);
       if (mixer) mixer.update(dt);
 
@@ -2469,7 +2544,7 @@ export default function PlanetDemo() {
         f.angle += f.speed * dt;
         const wobble = new THREE.Vector3(Math.cos(f.angle), 0, Math.sin(f.angle)).multiplyScalar(f.radius);
         const d = f.center.clone().add(wobble).normalize();
-        f.g.position.copy(d).multiplyScalar(PLANET_R + SEA_LEVEL - 0.15);
+        f.g.position.copy(d).multiplyScalar(PLANET_R + seaSurfaceH(d) - 0.15);
         orientToSurface(f.g, d, f.angle + Math.PI / 2);
       });
 
@@ -2621,7 +2696,7 @@ export default function PlanetDemo() {
         for (const attempt of attempts) {
           if (attempt.lengthSq() < 0.0001) continue;
           const candidateDir = base.clone().addScaledVector(attempt, MOVE_SPEED * dt * curSpeed).normalize();
-          if (!isBlocked(candidateDir) && terrainHeight(candidateDir) > SEA_LEVEL - 0.35) {
+          if (!isBlocked(candidateDir) && terrainHeight(candidateDir) > seaSurfaceH(candidateDir) - 0.35) {
             charDir = candidateDir;
             moving = true;
             break;
