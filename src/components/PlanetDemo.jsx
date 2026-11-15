@@ -57,13 +57,15 @@ function noiseAt(dir) {
 }
 // Water is concentrated into exactly two seas instead of scattered wherever the
 // noise happens to dip — each sea is a region around a fixed center direction.
-let SEA_CENTERS = [new THREE.Vector3(0.6, -0.3, 0.7).normalize(), new THREE.Vector3(-0.7, 0.2, -0.5).normalize()];
-const SEA_RADIUS = 0.6; // radians
+let SEA_CENTERS = [new THREE.Vector3(0.6, -0.3, 0.7).normalize()]; // un unico mare grande
+const SEA_RADIUS = 0.86; // radianti: stessa superficie dei due mari di prima messi insieme
 function seaMask(dir) {
   let m = 0;
   for (const c of SEA_CENTERS) {
-    const ang = dir.angleTo(c);
-    m = Math.max(m, 1 - smoothstep(SEA_RADIUS * 0.5, SEA_RADIUS, ang));
+    // coste frastagliate: baie e penisole invece di un cerchio perfetto
+    const coast = Math.sin(dir.x * 7.3 + dir.y * 3.1 + 0.7) * Math.sin(dir.z * 6.1 - dir.y * 4.3) * 0.11 + Math.sin(dir.x * 13.7 - dir.z * 11.3) * 0.04;
+    const ang = dir.angleTo(c) + coast;
+    m = Math.max(m, 1 - smoothstep(SEA_RADIUS * 0.55, SEA_RADIUS, ang));
   }
   return m; // 1 deep inside a sea region, fading to 0 outside SEA_RADIUS
 }
@@ -125,16 +127,14 @@ function configureWorld(code) {
     return v;
   };
   NOISE_WAVES = [[1.3, 1.0], [2.1, 0.5], [3.7, 0.25], [5.3, 0.125]].map(([f, a]) => ({ v: rv(), f, a, p: R() * Math.PI * 2 }));
-  const s1 = pick(SEA_RADIUS + 0.25);
-  const s2 = pick(SEA_RADIUS + 0.25, [[s1, 1.4]]);
-  SEA_CENTERS = [s1, s2];
+  SEA_CENTERS = [pick(SEA_RADIUS + 0.3)];
   const seaAvoid = SEA_CENTERS.map((c) => [c, SEA_RADIUS * 0.8]);
   MOUNTAINS = [[0.58, 8.0], [0.52, 7.0], [0.5, 6.2], [0.4, 5.0]].map(([r, h]) => ({ c: pick(r * 0.7 + 0.2, seaAvoid), r, h }));
   HILLS = [{ v: rv(), f: 7.5, p: R() * 6.28 }, { v: rv(), f: 9.1, p: R() * 6.28 }];
 }
 // Superficie del mare piu' piatta del pianeta: verso il centro di ogni mare scende un po',
 // cosi' su un pianeta piccolo il mare non sembra una cupola. A riva coincide con SEA_LEVEL.
-const SEA_FLAT = 0.6;
+const SEA_FLAT = 0.42;
 function seaSurfaceH(dir) {
   let drop = 0;
   for (const c of SEA_CENTERS) {
@@ -159,7 +159,7 @@ function baseTerrainHeight(dir) {
   const noise = noiseAt(dir);
   const mask = seaMask(dir);
   const landH = noise * 0.55 + 1.0 + hillsAt(dir) + mountainAt(dir); // colline e montagne vere
-  const seaH = noise * 0.3 - 7.0; // fondale profondo: la superficie del mare scende verso il centro
+  const seaH = noise * 0.3 - 9.0; // fondale profondo: la superficie del mare scende verso il centro
   return landH * (1 - mask) + seaH * mask;
 }
 
@@ -1870,9 +1870,14 @@ export default function PlanetDemo() {
       mapCtl.appendChild(b);
     };
     const setZoom = (z) => { mapZoom = Math.max(1, Math.min(4, z)); MAP_ANG = MAP_FULL / mapZoom; mapTimer = 0; };
-    const closeMap = () => { mapBig = false; mapZoom = 1; applyMapSize(); };
+    // vista spostabile: quando trascini la mappa grande il centro non segue piu' il personaggio
+    let mapPanned = false;
+    const mapC = new THREE.Vector3(), mapF = new THREE.Vector3();
+    const recenterMap = () => { mapPanned = false; mapTimer = 0; };
+    const closeMap = () => { mapBig = false; mapZoom = 1; recenterMap(); applyMapSize(); };
     mapBtn("\u2212", () => setZoom(mapZoom / 1.5));
     mapBtn("+", () => setZoom(mapZoom * 1.5));
+    mapBtn("\u25CE", recenterMap);
     mapBtn("\u2715", closeMap);
     mount.appendChild(mapCtl);
     // piccola: un tocco la apre. Grande: un tocco NON la chiude; zoom con +/- , rotella o pinch (due dita).
@@ -1884,10 +1889,26 @@ export default function PlanetDemo() {
       mapPtrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
       if (mapPtrs.size === 2) { const [a, b] = [...mapPtrs.values()]; pinchD0 = Math.hypot(a.x - b.x, a.y - b.y); pinchZ0 = mapZoom; }
     });
+    const panAx = new THREE.Vector3(), panR = new THREE.Vector3();
     mapCanvas.addEventListener("pointermove", (e) => {
       if (!mapPtrs.has(e.pointerId)) return;
+      const prev = mapPtrs.get(e.pointerId);
       mapPtrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
-      if (mapPtrs.size === 2 && pinchD0 > 0) { const [a, b] = [...mapPtrs.values()]; setZoom(pinchZ0 * (Math.hypot(a.x - b.x, a.y - b.y) / pinchD0)); }
+      if (mapPtrs.size === 2 && pinchD0 > 0) { const [a, b] = [...mapPtrs.values()]; setZoom(pinchZ0 * (Math.hypot(a.x - b.x, a.y - b.y) / pinchD0)); return; }
+      if (mapPtrs.size !== 1 || !mapBig) return;
+      // un dito: trascino la mappa (il terreno segue il dito)
+      const dx = e.clientX - prev.x, dy = e.clientY - prev.y;
+      if (dx === 0 && dy === 0) return;
+      if (!mapPanned) { mapC.copy(charDir); mapF.copy(facing); mapPanned = true; }
+      const radPerPx = MAP_ANG / (MAP_PX / 2);
+      panR.crossVectors(mapF, mapC).normalize();
+      // spostare il centro verso -dx (destra/sinistra) e +dy (avanti/indietro)
+      panAx.copy(panR).multiplyScalar(-dy).addScaledVector(mapF, -dx).normalize();
+      const a = Math.hypot(dx, dy) * radPerPx;
+      mapC.applyAxisAngle(panAx, a).normalize();
+      mapF.applyAxisAngle(panAx, a);
+      mapF.addScaledVector(mapC, -mapF.dot(mapC)).normalize();
+      mapTimer = 0;
     });
     const mapUp = (e) => mapPtrs.delete(e.pointerId);
     mapCanvas.addEventListener("pointerup", mapUp);
@@ -1895,11 +1916,30 @@ export default function PlanetDemo() {
     mapCanvas.addEventListener("wheel", (e) => { if (!mapBig) return; e.preventDefault(); setZoom(mapZoom * (e.deltaY < 0 ? 1.2 : 1 / 1.2)); }, { passive: false });
     mapBackdrop.addEventListener("pointerdown", (e) => { e.stopPropagation(); closeMap(); });
     const mpR = new THREE.Vector3(), mpD = new THREE.Vector3(), mpT = new THREE.Vector3();
+    const vC = new THREE.Vector3(), vF = new THREE.Vector3();
+    // colori della mappa presi dalla stessa palette del terreno e del mare
+    const toRGB = (c) => [Math.round(c.r * 255), Math.round(c.g * 255), Math.round(c.b * 255)];
+    const MC = { sand: toRGB(sandC), grass: toRGB(grassC.clone().lerp(new THREE.Color("#c9c27a"), 0.2)), rock: toRGB(rockC), snow: toRGB(snowC), shallow: toRGB(seaShallow), deep: toRGB(seaDeep), path: toRGB(new THREE.Color("#c8b48c")) };
+    const mix = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+    // proietta una direzione sulla mappa (null se fuori dal cerchio)
+    function mapProject(d, limit) {
+      const dp = d.dot(vC);
+      const ang = Math.acos(Math.min(1, Math.max(-1, dp)));
+      if (ang > MAP_ANG * limit) return null;
+      const Rm = MAP_PX / 2;
+      mpT.copy(d).addScaledVector(vC, -dp);
+      const tl = mpT.length();
+      if (tl < 1e-5) return { x: Rm, y: Rm };
+      const rr = (ang / MAP_ANG) * Rm;
+      return { x: Rm + (mpT.dot(mpR) / tl) * rr, y: Rm - (mpT.dot(vF) / tl) * rr };
+    }
     function updateMinimap(dt) {
       mapTimer -= dt;
       if (mapTimer > 0) return;
       mapTimer = mapBig ? 0.5 : 0.25;
-      mpR.crossVectors(facing, charDir).normalize();
+      vC.copy(mapPanned ? mapC : charDir);
+      vF.copy(mapPanned ? mapF : facing);
+      mpR.crossVectors(vF, vC).normalize();
       for (let j = 0; j < MAP_RES; j++) {
         for (let i = 0; i < MAP_RES; i++) {
           const px = ((i + 0.5) / MAP_RES) * 2 - 1, py = ((j + 0.5) / MAP_RES) * 2 - 1;
@@ -1908,14 +1948,18 @@ export default function PlanetDemo() {
           if (r > 1) { mapImg.data[o + 3] = 0; continue; }
           const ang = r * MAP_ANG;
           const k = r > 0.0001 ? Math.sin(ang) / r : 0;
-          mpD.copy(charDir).multiplyScalar(Math.cos(ang)).addScaledVector(mpR, px * k).addScaledVector(facing, -py * k).normalize();
+          mpD.copy(vC).multiplyScalar(Math.cos(ang)).addScaledVector(mpR, px * k).addScaledVector(vF, -py * k).normalize();
           const h = terrainHeight(mpD);
+          const above = h - seaSurfaceH(mpD);
           let c;
-          if (h <= seaSurfaceH(mpD) + 0.15) c = [70, 130, 168];
-          else if (h < SEA_LEVEL + 0.9) c = [226, 208, 150];
-          else if (h > 5.8) c = [240, 240, 244];
-          else if (h > 3.6) c = [128, 126, 122];
-          else c = [128, 170, 98];
+          if (above <= 0.1) c = mix(MC.shallow, MC.deep, smoothstep(0.3, 3.0, -above));
+          else if (above < 0.55) c = MC.sand;
+          else if (h > 5.8) c = MC.snow;
+          else if (h > 3.4) c = MC.rock;
+          else {
+            c = MC.grass;
+            if (mapBig) { const pw = pathWeight(mpD); if (pw > 0.4) c = MC.path; }
+          }
           mapImg.data[o] = c[0]; mapImg.data[o + 1] = c[1]; mapImg.data[o + 2] = c[2]; mapImg.data[o + 3] = 255;
         }
       }
@@ -1923,46 +1967,42 @@ export default function PlanetDemo() {
       mctx.clearRect(0, 0, MAP_PX, MAP_PX);
       mctx.imageSmoothingEnabled = true;
       mctx.drawImage(mapTmp, 0, 0, MAP_PX, MAP_PX);
-      const Rm = MAP_PX / 2;
+      const sz = mapBig ? 5 : 4;
       for (let i = 0; i < buildings.length; i++) {
-        mpD.copy(buildings[i].pos).normalize();
-        const dp = mpD.dot(charDir);
-        const ang = Math.acos(Math.min(1, Math.max(-1, dp)));
-        if (ang > MAP_ANG * 0.97) continue;
-        mpT.copy(mpD).addScaledVector(charDir, -dp);
-        const tl = mpT.length();
-        if (tl < 1e-5) continue;
-        const rr = (ang / MAP_ANG) * Rm;
-        mctx.fillStyle = "#d9503f";
-        mctx.fillRect(Rm + (mpT.dot(mpR) / tl) * rr - 2, Rm - (mpT.dot(facing) / tl) * rr - 2, 4, 4);
+        const q = mapProject(mpD.copy(buildings[i].pos).normalize(), 0.97);
+        if (!q) continue;
+        mctx.fillStyle = "#d9503f"; mctx.strokeStyle = "rgba(0,0,0,.35)"; mctx.lineWidth = 1;
+        mctx.fillRect(q.x - sz / 2, q.y - sz / 2, sz, sz); mctx.strokeRect(q.x - sz / 2, q.y - sz / 2, sz, sz);
       }
       for (let i = 0; i < places.length; i++) {
-        mpD.copy(places[i].dir);
-        const dp = mpD.dot(charDir), ang = Math.acos(Math.min(1, Math.max(-1, dp)));
-        if (ang > MAP_ANG * 0.97) continue;
-        mpT.copy(mpD).addScaledVector(charDir, -dp);
-        const tl = mpT.length();
-        if (tl < 1e-5) continue;
-        const rr = (ang / MAP_ANG) * Rm, cx = Rm + (mpT.dot(mpR) / tl) * rr, cy = Rm - (mpT.dot(facing) / tl) * rr;
-        const k = mapBig ? 1.5 : 1;
+        const q = mapProject(places[i].dir, 0.97);
+        if (!q) continue;
+        const cx = q.x, cy = q.y, k = mapBig ? 1.5 : 1;
         mctx.fillStyle = places[i].act > 0.5 ? "#ffffff" : "#ffd35c"; mctx.strokeStyle = "#7a5a00"; mctx.lineWidth = 1;
         mctx.beginPath(); mctx.moveTo(cx, cy - 5 * k); mctx.lineTo(cx + 4 * k, cy); mctx.lineTo(cx, cy + 5 * k); mctx.lineTo(cx - 4 * k, cy); mctx.closePath(); mctx.fill(); mctx.stroke();
         if (mapBig) { mctx.font = "600 11px system-ui, sans-serif"; mctx.lineWidth = 3; mctx.strokeStyle = "rgba(0,0,0,.65)"; mctx.strokeText(places[i].name, cx + 9, cy + 4); mctx.fillStyle = "#fff"; mctx.fillText(places[i].name, cx + 9, cy + 4); }
       }
       remotes.forEach((r) => {
         if (!r.curDir) return;
-        mpD.copy(r.curDir);
-        const dp = mpD.dot(charDir), ang = Math.acos(Math.min(1, Math.max(-1, dp)));
-        if (ang > MAP_ANG * 0.99) return;
-        mpT.copy(mpD).addScaledVector(charDir, -dp);
-        const tl = mpT.length();
-        const rr = (ang / MAP_ANG) * Rm;
-        const cx = tl < 1e-5 ? Rm : Rm + (mpT.dot(mpR) / tl) * rr, cy = tl < 1e-5 ? Rm : Rm - (mpT.dot(facing) / tl) * rr;
+        const q = mapProject(r.curDir, 0.99);
+        if (!q) return;
         mctx.fillStyle = "#4fe3ff"; mctx.strokeStyle = "#fff"; mctx.lineWidth = 2;
-        mctx.beginPath(); mctx.arc(cx, cy, mapBig ? 6 : 4, 0, 6.283); mctx.fill(); mctx.stroke();
+        mctx.beginPath(); mctx.arc(q.x, q.y, mapBig ? 6 : 4, 0, 6.283); mctx.fill(); mctx.stroke();
       });
-      mctx.fillStyle = "#fff"; mctx.strokeStyle = "#222"; mctx.lineWidth = 1.5;
-      mctx.beginPath(); mctx.moveTo(Rm, Rm - 6); mctx.lineTo(Rm + 5, Rm + 5); mctx.lineTo(Rm - 5, Rm + 5); mctx.closePath(); mctx.fill(); mctx.stroke();
+      // io: freccia orientata come il mio sguardo (al centro se la mappa non e' spostata)
+      const me = mapProject(charDir, 0.99);
+      if (me) {
+        const fx = facing.dot(mpR), fy = facing.dot(vF);
+        const rot = Math.atan2(fx, fy);
+        mctx.save(); mctx.translate(me.x, me.y); mctx.rotate(rot);
+        mctx.fillStyle = "#fff"; mctx.strokeStyle = "#222"; mctx.lineWidth = 1.5;
+        mctx.beginPath(); mctx.moveTo(0, -7); mctx.lineTo(5, 5); mctx.lineTo(-5, 5); mctx.closePath(); mctx.fill(); mctx.stroke();
+        mctx.restore();
+      }
+      if (mapPanned && mapBig) {
+        mctx.font = "600 11px system-ui, sans-serif"; mctx.fillStyle = "rgba(255,255,255,.85)"; mctx.textAlign = "center";
+        mctx.fillText("\u25CE per tornare a te", MAP_PX / 2, MAP_PX - 10); mctx.textAlign = "left";
+      }
     }
 
     // ---------- Polvere (passi e atterraggio) ----------
@@ -2468,6 +2508,7 @@ export default function PlanetDemo() {
     }
     if (TEST_PARTNER) window.__info = () => ({ villages: VILLAGES.length, buildings: buildings.length, trees: decor.tree.length, places: places.length });
     // test: mi porto sulla riva del mare i, guardando verso il largo (k = direzione di uscita)
+    if (TEST_PARTNER) window.__pitch = (v) => { camPitch = v; };
     if (TEST_PARTNER) window.__tpSea = (i, k = 0, back = 4) => {
       const c = SEA_CENTERS[i % SEA_CENTERS.length];
       const ref = Math.abs(c.y) < 0.9 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
