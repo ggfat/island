@@ -560,29 +560,64 @@ export default function PlanetDemo() {
       }
     }
 
-    // ---------- Quality fallback: if the real models make it too slow, go back to the light stand-ins ----------
+    // ---------- Qualita' grafica: sui dispositivi lenti si riducono risoluzione, ombre e dettagli,
+    // ma i modelli veri restano sempre (niente piu' sagome semplici). "Auto" sceglie da solo e ricorda la scelta.
+    const QUALITY_LEVELS = [
+      { name: "Alta", pr: Math.min(window.devicePixelRatio || 1, 2), shadow: 1024, small: true },
+      { name: "Media", pr: Math.min(window.devicePixelRatio || 1, 1.4), shadow: 1024, small: true },
+      { name: "Bassa", pr: 1, shadow: 512, small: true },
+      { name: "Minima", pr: 0.7, shadow: 0, small: false },
+    ];
+    const qGet = (k) => { try { return localStorage.getItem(k); } catch { return null; } };
+    const qSet = (k, v) => { try { localStorage.setItem(k, v); } catch { /* ignora */ } };
     const quality = {
-      downgraded: false,
+      mode: qGet("island_quality") || "auto", // "auto" oppure "0".."3"
+      level: 0,
+      smallObjs: [], // dettagli piccoli (cespugli) nascosti al livello minimo
       frameTimes: [],
-      groups: [],
-      register(proc, real) {
-        this.groups.push({ proc, real });
-      },
-      sample(dt, elapsed) {
-        if (this.downgraded) return;
-        this.frameTimes.push(dt);
-        if (this.frameTimes.length > 60) this.frameTimes.shift();
-        if (elapsed < 5 || this.frameTimes.length < 60) return;
-        const fps = 1 / (this.frameTimes.reduce((a, b) => a + b, 0) / this.frameTimes.length);
-        if (fps < 24) {
-          this.downgraded = true;
-          this.groups.forEach(({ proc, real }) => {
-            proc.forEach((o) => (o.visible = true));
-            real.forEach((o) => (o.visible = false));
-          });
+      cooldown: 4,
+      raisedOnce: false,
+      goodWindows: 0,
+      onChange: null,
+      register() { /* compatibilita': i modelli veri non vengono piu' sostituiti */ },
+      apply(lv) {
+        this.level = Math.max(0, Math.min(QUALITY_LEVELS.length - 1, lv));
+        const L = QUALITY_LEVELS[this.level];
+        renderer.setPixelRatio(L.pr);
+        sun.castShadow = L.shadow > 0;
+        if (L.shadow > 0 && sun.shadow.mapSize.x !== L.shadow) {
+          sun.shadow.mapSize.set(L.shadow, L.shadow);
+          if (sun.shadow.map) { sun.shadow.map.dispose(); sun.shadow.map = null; }
         }
+        this.smallObjs.forEach((o) => (o.visible = L.small));
+        this.frameTimes = [];
+        this.cooldown = 3;
+        if (this.mode === "auto") qSet("island_quality_auto", String(this.level));
+        if (this.onChange) this.onChange();
+      },
+      setMode(m) {
+        this.mode = m;
+        qSet("island_quality", m);
+        this.apply(m === "auto" ? Number(qGet("island_quality_auto") || 0) : Number(m));
+      },
+      label() { return (this.mode === "auto" ? "Auto \u00b7 " : "") + QUALITY_LEVELS[this.level].name; },
+      sample(dt) {
+        if (this.mode !== "auto" || document.hidden) return;
+        if (this.cooldown > 0) { this.cooldown -= dt; return; }
+        // finestre di circa 3 secondi (anche se i fotogrammi sono pochissimi)
+        this.frameTimes.push(Math.min(dt, 2));
+        const win = this.frameTimes.reduce((a, c) => a + c, 0);
+        if (win < 3 || this.frameTimes.length < 3) return;
+        const fps = this.frameTimes.length / win;
+        this.frameTimes = [];
+        if (fps < 27 && this.level < QUALITY_LEVELS.length - 1) { this.goodWindows = 0; this.apply(this.level + 1); return; }
+        // se va molto bene risale di un livello, una sola volta per partita (evita l'altalena)
+        if (fps > 56 && this.level > 0 && !this.raisedOnce) {
+          if (++this.goodWindows >= 3) { this.raisedOnce = true; this.goodWindows = 0; this.apply(this.level - 1); }
+        } else this.goodWindows = 0;
       },
     };
+    quality.apply(quality.mode === "auto" ? Number(qGet("island_quality_auto") || 0) : Number(quality.mode));
 
     // ---------- Real models (trees, rocks, bushes) swapped in once loaded; stand-ins stay as fallback ----------
     function swapInReal(kind, paths) {
@@ -599,6 +634,7 @@ export default function PlanetDemo() {
         });
         const procObjs = decor[kind].map((e) => e.obj);
         procObjs.forEach((o) => (o.visible = false));
+        if (kind === "bush") { realMeshes.forEach((m) => quality.smallObjs.push(m)); realMeshes.forEach((m) => (m.visible = QUALITY_LEVELS[quality.level].small)); }
         quality.register(procObjs, realMeshes);
       });
     }
@@ -2367,6 +2403,13 @@ export default function PlanetDemo() {
       dayItem.textContent = "\u2600\uFE0F Giorno / notte: " + (alwaysDay ? "sempre giorno" : "automatico");
       toast(alwaysDay ? "Sempre giorno" : "Giorno e notte automatici");
     });
+    const qItem = menuItem("\u{1F5A5}\uFE0F Grafica: " + quality.label(), () => {
+      // giro: Auto -> Alta -> Media -> Bassa -> Minima -> Auto
+      const order = ["auto", "0", "1", "2", "3"];
+      quality.setMode(order[(order.indexOf(quality.mode) + 1) % order.length]);
+      toast("Grafica: " + quality.label());
+    });
+    quality.onChange = () => { qItem.textContent = "\u{1F5A5}\uFE0F Grafica: " + quality.label(); };
     menuItem("\u{1F6AA} Esci", leaveGame);
     netLabel.style.pointerEvents = "auto";
     netLabel.style.cursor = "pointer";
@@ -2508,6 +2551,7 @@ export default function PlanetDemo() {
     }
     if (TEST_PARTNER) window.__info = () => ({ villages: VILLAGES.length, buildings: buildings.length, trees: decor.tree.length, places: places.length });
     // test: mi porto sulla riva del mare i, guardando verso il largo (k = direzione di uscita)
+    if (TEST_PARTNER) window.__q = () => ({ level: quality.level, mode: quality.mode, n: quality.frameTimes.length, cd: quality.cooldown, hidden: document.hidden });
     if (TEST_PARTNER) window.__pitch = (v) => { camPitch = v; };
     if (TEST_PARTNER) window.__tpSea = (i, k = 0, back = 4) => {
       const c = SEA_CENTERS[i % SEA_CENTERS.length];
@@ -2654,7 +2698,7 @@ export default function PlanetDemo() {
       const dt = Math.min(0.05, clock.getDelta());
       const t = clock.elapsedTime;
       seaUniforms.uTime.value = t;
-      quality.sample(dt, t);
+      quality.sample(clock.elapsedTime - (quality._last ?? clock.elapsedTime)); quality._last = clock.elapsedTime;
       if (mixer) mixer.update(dt);
 
       // Il sole gira attorno al pianeta: giorno e notte dipendono da DOVE ti trovi (terminatore reale).
