@@ -288,12 +288,13 @@ export default function PlanetDemo() {
     // ROADS: sentieri dipinti nel terreno (riempiti dopo aver creato i villaggi); PLAZAS: piazze rotonde
     const ROADS = [];
     const PLAZAS = [];
-    function pathWeight(d) {
+    function pathWeight(d, roadsToo = true) {
       let best = 0;
       for (const pz of PLAZAS) {
         const c = d.dot(pz.d);
         if (c > pz.cosOut) best = Math.max(best, smoothstep(pz.cosOut, pz.cosIn, c));
       }
+      if (!roadsToo) return best;
       for (const rd of ROADS) {
         if (d.dot(rd.mid) < rd.cosReach) continue;
         const pts = rd.pts;
@@ -335,7 +336,7 @@ export default function PlanetDemo() {
       tmpColor.lerp(rockC, Math.max(smoothstep(0.12, 0.22, steep), smoothstep(2.8, 3.6, h)));
       if (h > 5.4) tmpColor.lerp(snowC, smoothstep(5.6, 6.6, h) * (1 - smoothstep(0.15, 0.3, steep)));
       if (withPaths && above > 0.25) {
-        const pw = pathWeight(dir);
+        const pw = pathWeight(dir, false); // nel terreno solo le piazze: i sentieri sono nastri a parte
         if (pw > 0) tmpColor.lerp(pw > 0.75 ? pathC : pathEdgeC, Math.min(1, pw * 1.3));
       }
       colors[i * 3] = tmpColor.r;
@@ -1007,8 +1008,59 @@ export default function PlanetDemo() {
     buildRoad(findLandSpawn(), villageCenter);
     for (let i = 0; i + 1 < VILLAGES.length; i++) buildRoad(VILLAGES[i], VILLAGES[i + 1]);
     VILLAGES.forEach((vc) => PLAZAS.push({ d: vc, cosIn: Math.cos(5.5 / PLANET_R), cosOut: Math.cos(7 / PLANET_R) }));
-    // terreno definitivo: piazzole livellate + sentieri; poi riallineo al suolo cio' che era gia' appoggiato
+    // terreno definitivo: piazzole livellate + piazze; poi riallineo al suolo cio' che era gia' appoggiato
     refreshTerrain(true);
+    // sentieri: nastri che seguono il terreno, con bordi sfumati (niente piu' scalini della griglia)
+    {
+      const rp = [], rc = [], ri = [];
+      const coreC = new THREE.Color("#c8b48c"), edgeC = new THREE.Color("#a4916b");
+      const tmpD = new THREE.Vector3(), tan = new THREE.Vector3(), side = new THREE.Vector3();
+      const CORE = 0.7, EDGE = 1.25, LIFT = 0.06;
+      const put = (d, alpha, c) => {
+        const h = terrainHeight(d);
+        const r = PLANET_R + h + LIFT;
+        rp.push(d.x * r, d.y * r, d.z * r);
+        rc.push(c.r, c.g, c.b, alpha * (h - seaSurfaceH(d) > 0.2 ? 1 : 0));
+      };
+      ROADS.forEach((rd) => {
+        // punti piu' fitti (circa ogni 40 cm) interpolando sulla sfera
+        const dense = [];
+        for (let k = 0; k + 1 < rd.pts.length; k++) {
+          const a = rd.pts[k], b = rd.pts[k + 1];
+          const n = Math.max(1, Math.round((a.angleTo(b) * PLANET_R) / 0.4));
+          for (let j = 0; j < n; j++) dense.push(a.clone().lerp(b, j / n).normalize());
+        }
+        dense.push(rd.pts[rd.pts.length - 1].clone());
+        const base = rp.length / 3;
+        dense.forEach((d, k) => {
+          const nx = dense[Math.min(dense.length - 1, k + 1)], pv = dense[Math.max(0, k - 1)];
+          tan.copy(nx).sub(pv);
+          side.crossVectors(d, tan).normalize();
+          // ai capi il nastro sfuma
+          const endFade = Math.min(1, k / 3, (dense.length - 1 - k) / 3);
+          for (const [off, al, c] of [[-EDGE, 0, edgeC], [-CORE, 1, coreC], [CORE, 1, coreC], [EDGE, 0, edgeC]]) {
+            tmpD.copy(d).addScaledVector(side, off / PLANET_R).normalize();
+            put(tmpD, al * endFade, c);
+          }
+          if (k > 0) {
+            const i0 = base + (k - 1) * 4, i1 = base + k * 4;
+            for (let q = 0; q < 3; q++) ri.push(i0 + q, i1 + q, i0 + q + 1, i0 + q + 1, i1 + q, i1 + q + 1);
+          }
+        });
+      });
+      if (ri.length) {
+        const rg = new THREE.BufferGeometry();
+        rg.setAttribute("position", new THREE.Float32BufferAttribute(rp, 3));
+        rg.setAttribute("color", new THREE.Float32BufferAttribute(rc, 4));
+        rg.setIndex(ri);
+        rg.computeVertexNormals();
+        const rm = new THREE.MeshToonMaterial({ vertexColors: true, gradientMap, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+        const roadMesh = new THREE.Mesh(rg, rm);
+        roadMesh.receiveShadow = true;
+        roadMesh.renderOrder = 1;
+        scene.add(roadMesh);
+      }
+    }
     ["tree", "bush", "rock"].forEach((k) => decor[k].forEach((it) => {
       const r0 = it.pos.length();
       const dd = it.pos.clone().normalize();
