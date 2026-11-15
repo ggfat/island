@@ -111,6 +111,7 @@ function mulberry32(a) {
 }
 const LEGACY_WORLD = { NOISE_WAVES, SEA_CENTERS, MOUNTAINS, HILLS };
 function configureWorld(code) {
+  TERRAIN_PADS = [];
   if (!code) { ({ NOISE_WAVES, SEA_CENTERS, MOUNTAINS, HILLS } = LEGACY_WORLD); return; }
   const R = mulberry32(hashStr(code));
   const rv = () => new THREE.Vector3(R() * 2 - 1, R() * 2 - 1, R() * 2 - 1).normalize();
@@ -142,7 +143,19 @@ function seaSurfaceH(dir) {
   }
   return SEA_LEVEL - drop;
 }
+// Piazzole: zone livellate (sotto gli edifici). Il terreno si raccorda dolcemente al livello della piazzola.
+let TERRAIN_PADS = [];
 function terrainHeight(dir) {
+  let h = baseTerrainHeight(dir);
+  for (let i = 0; i < TERRAIN_PADS.length; i++) {
+    const p = TERRAIN_PADS[i];
+    const c = dir.x * p.d.x + dir.y * p.d.y + dir.z * p.d.z;
+    if (c <= p.cosOut) continue;
+    h += (p.h - h) * smoothstep(p.cosOut, p.cosIn, c);
+  }
+  return h;
+}
+function baseTerrainHeight(dir) {
   const noise = noiseAt(dir);
   const mask = seaMask(dir);
   const landH = noise * 0.55 + 1.0 + hillsAt(dir) + mountainAt(dir); // colline e montagne vere
@@ -260,21 +273,53 @@ export default function PlanetDemo() {
     const dir = new THREE.Vector3();
     const tmpColor = new THREE.Color();
     const heights = new Float32Array(posAttr.count);
+    const unitDirs = new Float32Array(posAttr.count * 3);
     for (let i = 0; i < posAttr.count; i++) {
       dir.set(posAttr.getX(i), posAttr.getY(i), posAttr.getZ(i)).normalize();
+      unitDirs[i * 3] = dir.x; unitDirs[i * 3 + 1] = dir.y; unitDirs[i * 3 + 2] = dir.z;
+    }
+    const grassLightC = grassC.clone().lerp(new THREE.Color("#c9c27a"), 0.5);
+    const grassDarkC = grassC.clone().lerp(new THREE.Color("#3f5e46"), 0.45);
+    const dirtC = sandC.clone().lerp(new THREE.Color("#8a7458"), 0.55);
+    const pathC = new THREE.Color("#c8b48c");
+    const pathEdgeC = new THREE.Color("#a4916b");
+    const colors = new Float32Array(posAttr.count * 3);
+    const nrm = new THREE.Vector3();
+    // ROADS: sentieri dipinti nel terreno (riempiti dopo aver creato i villaggi); PLAZAS: piazze rotonde
+    const ROADS = [];
+    const PLAZAS = [];
+    function pathWeight(d) {
+      let best = 0;
+      for (const pz of PLAZAS) {
+        const c = d.dot(pz.d);
+        if (c > pz.cosOut) best = Math.max(best, smoothstep(pz.cosOut, pz.cosIn, c));
+      }
+      for (const rd of ROADS) {
+        if (d.dot(rd.mid) < rd.cosReach) continue;
+        const pts = rd.pts;
+        for (let k = 0; k + 1 < pts.length; k++) {
+          // distanza dal segmento (su raggio unitario, poi in metri)
+          const a = pts[k], b = pts[k + 1];
+          const abx = b.x - a.x, aby = b.y - a.y, abz = b.z - a.z;
+          const t = Math.max(0, Math.min(1, ((d.x - a.x) * abx + (d.y - a.y) * aby + (d.z - a.z) * abz) / (abx * abx + aby * aby + abz * abz)));
+          const dx = d.x - (a.x + abx * t), dy = d.y - (a.y + aby * t), dz = d.z - (a.z + abz * t);
+          const dist = Math.sqrt(dx * dx + dy * dy + dz * dz) * PLANET_R;
+          if (dist < 1.7) best = Math.max(best, 1 - smoothstep(0.9, 1.7, dist));
+        }
+      }
+      return best;
+    }
+    function refreshTerrain(withPaths) {
+    for (let i = 0; i < posAttr.count; i++) {
+      dir.set(unitDirs[i * 3], unitDirs[i * 3 + 1], unitDirs[i * 3 + 2]);
       const h = terrainHeight(dir);
       heights[i] = h;
       posAttr.setXYZ(i, dir.x * (PLANET_R + h), dir.y * (PLANET_R + h), dir.z * (PLANET_R + h));
     }
     planetGeo.computeVertexNormals();
     const nrmAttr = planetGeo.attributes.normal;
-    const grassLightC = grassC.clone().lerp(new THREE.Color("#c9c27a"), 0.5);
-    const grassDarkC = grassC.clone().lerp(new THREE.Color("#3f5e46"), 0.45);
-    const dirtC = sandC.clone().lerp(new THREE.Color("#8a7458"), 0.55);
-    const colors = new Float32Array(posAttr.count * 3);
-    const nrm = new THREE.Vector3();
     for (let i = 0; i < posAttr.count; i++) {
-      dir.set(posAttr.getX(i), posAttr.getY(i), posAttr.getZ(i)).normalize();
+      dir.set(unitDirs[i * 3], unitDirs[i * 3 + 1], unitDirs[i * 3 + 2]);
       nrm.set(nrmAttr.getX(i), nrmAttr.getY(i), nrmAttr.getZ(i));
       const h = heights[i];
       const above = h - seaSurfaceH(dir); // altezza sopra l'acqua: la sabbia segue la riva vera
@@ -289,11 +334,19 @@ export default function PlanetDemo() {
       tmpColor.lerp(dirtC, smoothstep(0.05, 0.12, steep) * 0.6);
       tmpColor.lerp(rockC, Math.max(smoothstep(0.12, 0.22, steep), smoothstep(2.8, 3.6, h)));
       if (h > 5.4) tmpColor.lerp(snowC, smoothstep(5.6, 6.6, h) * (1 - smoothstep(0.15, 0.3, steep)));
+      if (withPaths && above > 0.25) {
+        const pw = pathWeight(dir);
+        if (pw > 0) tmpColor.lerp(pw > 0.75 ? pathC : pathEdgeC, Math.min(1, pw * 1.3));
+      }
       colors[i * 3] = tmpColor.r;
       colors[i * 3 + 1] = tmpColor.g;
       colors[i * 3 + 2] = tmpColor.b;
     }
     planetGeo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+    posAttr.needsUpdate = true;
+    planetGeo.attributes.color.needsUpdate = true;
+    }
+    refreshTerrain(false);
     const planetMat = new THREE.MeshToonMaterial({ vertexColors: true, gradientMap });
     const planet = new THREE.Mesh(planetGeo, planetMat);
     planet.receiveShadow = true;
@@ -758,16 +811,22 @@ export default function PlanetDemo() {
       }
       g.add(standIn);
 
-      // foundation: reaches down to the lowest ground point under the footprint
-      const fh = plan.lift - plan.dmin + 0.7;
-      const foundation = new THREE.Mesh(new THREE.BoxGeometry(w + 0.5, fh, dp + 0.5), foundationMat);
-      foundation.position.set(cx, -fh / 2 + 0.04, cz);
+      // piazzola: il terreno sotto l'edificio viene livellato (meta' scavo, meta' riporto) e raccordato
+      const dn = d.clone().normalize();
+      const padH = terrainHeight(dn) + (plan.lift + plan.dmin) / 2;
+      const halfDiag = Math.hypot(Math.max(-T.x0, T.x1), Math.max(-T.z0, T.z1)) + 0.7;
+      TERRAIN_PADS.push({ d: dn, h: padH, cosIn: Math.cos(halfDiag / PLANET_R), cosOut: Math.cos((halfDiag + 3.2) / PLANET_R) });
+      // zoccolo basso di pietra, appena visibile
+      const fh = 0.5;
+      const foundation = new THREE.Mesh(new THREE.BoxGeometry(w + 0.4, fh, dp + 0.4), foundationMat);
+      foundation.position.set(cx, -fh / 2 + 0.12, cz);
       foundation.receiveShadow = true;
       g.add(foundation);
 
-      g.position.copy(plan.surf.point).addScaledVector(plan.surf.normal, plan.lift);
-      g.up.copy(plan.surf.normal);
-      g.lookAt(g.position.clone().add(plan.zAxis));
+      g.position.copy(dn).multiplyScalar(PLANET_R + padH);
+      g.up.copy(dn);
+      const zFlat = plan.zAxis.clone().addScaledVector(dn, -plan.zAxis.dot(dn)).normalize();
+      g.lookAt(g.position.clone().add(zFlat));
       scene.add(g);
       g.updateMatrixWorld(true);
 
@@ -790,7 +849,9 @@ export default function PlanetDemo() {
     const wellStone = new THREE.MeshToonMaterial({ color: "#8d8a84", gradientMap });
     const lampGlow = new THREE.MeshBasicMaterial({ color: "#ffd98a" });
     const lampPost = new THREE.MeshToonMaterial({ color: "#3b3a3c", gradientMap });
+    const groundProps = []; // pozzi e lampioni: da riallineare quando il terreno viene livellato
     function orientUp(obj, surf) {
+      groundProps.push(obj);
       obj.position.copy(surf.point);
       obj.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), surf.normal);
     }
@@ -830,7 +891,7 @@ export default function PlanetDemo() {
           if (hutDir.angleTo(obstacles[k].dir) < obstacles[k].r + bR / PLANET_R) { clear = false; break; }
         }
         if (clear && placeBuilding(hutDir, vc.clone().sub(hutDir), order[i], 1.8)) {
-          buildRoad(vc, ringAt(angle, 11 / PLANET_R), 5);
+          buildRoad(vc, ringAt(angle, 13 / PLANET_R));
         }
         const lampDir = ringAt(angle + Math.PI / order.length, 12 / PLANET_R);
         if (terrainHeight(lampDir) > SEA_LEVEL + 0.5) addLamp(lampDir);
@@ -881,38 +942,49 @@ export default function PlanetDemo() {
       quality.register(standIns, realMeshes);
     });
 
-    // road: a chain of flat tiles following the great-circle arc from spawn to the village
-    function buildRoad(dirA, dirB, steps) {
-      const roadMat = new THREE.MeshToonMaterial({ color: "#a89a7c", gradientMap });
+    // sentiero: arco tra due punti con una leggera curva, dipinto nel terreno (vedi refreshTerrain)
+    function buildRoad(dirA, dirB) {
       const a = dirA.clone().normalize();
       const b = dirB.clone().normalize();
       const angleTotal = a.angleTo(b);
       if (angleTotal < 0.005) return;
       const sinTotal = Math.sin(angleTotal);
-      const segLen = (angleTotal * PLANET_R) / steps;
-      function slerpDir(t) {
+      const lenM = angleTotal * PLANET_R;
+      const steps = Math.max(4, Math.round(lenM / 1.2));
+      const side = new THREE.Vector3().crossVectors(a, b).normalize();
+      const bend = (rand() - 0.5) * Math.min(4, lenM * 0.12); // curva morbida in metri
+      const wig = rand() * 6.28;
+      const pts = [];
+      for (let i = 0; i <= steps; i++) {
+        const t = i / steps;
         const wa = Math.sin((1 - t) * angleTotal) / sinTotal;
         const wb = Math.sin(t * angleTotal) / sinTotal;
-        return new THREE.Vector3().addScaledVector(a, wa).addScaledVector(b, wb).normalize();
+        const d = new THREE.Vector3().addScaledVector(a, wa).addScaledVector(b, wb).normalize();
+        const off = Math.sin(t * Math.PI) * bend + Math.sin(t * Math.PI * 3 + wig) * Math.sin(t * Math.PI) * 0.6;
+        d.addScaledVector(side, off / PLANET_R).normalize();
+        pts.push(d);
       }
-      for (let i = 0; i <= steps; i++) {
-        const tt = i / steps;
-        const d = slerpDir(tt);
-        if (terrainHeight(d) < SEA_LEVEL + 0.25) continue;
-        const dNext = slerpDir(Math.min(1, tt + 0.01));
-        const surf = getSurfacePoint(d);
-        const rawTangent = dNext.clone().sub(d);
-        const tangent = rawTangent.addScaledVector(surf.normal, -rawTangent.dot(surf.normal)).normalize();
-        const tile = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.06, segLen * 1.4), roadMat);
-        tile.receiveShadow = true;
-        tile.position.copy(surf.point).addScaledVector(surf.normal, 0.03);
-        tile.up.copy(surf.normal);
-        tile.lookAt(tile.position.clone().add(tangent));
-        scene.add(tile);
-      }
+      const mid = pts[Math.floor(pts.length / 2)].clone();
+      const reach = (lenM / 2 + 2) / PLANET_R;
+      ROADS.push({ pts, mid, cosReach: Math.cos(Math.min(Math.PI, reach)) });
     }
-    buildRoad(findLandSpawn(), villageCenter, Math.max(6, Math.round((findLandSpawn().angleTo(villageCenter) * PLANET_R) / 1.1)));
-    for (let i = 0; i + 1 < VILLAGES.length; i++) buildRoad(VILLAGES[i], VILLAGES[i + 1], Math.round((VILLAGES[i].angleTo(VILLAGES[i + 1]) * PLANET_R) / 1.1));
+    buildRoad(findLandSpawn(), villageCenter);
+    for (let i = 0; i + 1 < VILLAGES.length; i++) buildRoad(VILLAGES[i], VILLAGES[i + 1]);
+    VILLAGES.forEach((vc) => PLAZAS.push({ d: vc, cosIn: Math.cos(5.5 / PLANET_R), cosOut: Math.cos(7 / PLANET_R) }));
+    // terreno definitivo: piazzole livellate + sentieri; poi riallineo al suolo cio' che era gia' appoggiato
+    refreshTerrain(true);
+    ["tree", "bush", "rock"].forEach((k) => decor[k].forEach((it) => {
+      const r0 = it.pos.length();
+      const dd = it.pos.clone().normalize();
+      const r1 = PLANET_R + terrainHeight(dd);
+      if (Math.abs(r1 - r0) < 0.01) return;
+      it.pos.copy(dd).multiplyScalar(r1);
+      it.obj.position.addScaledVector(dd, r1 - r0);
+    }));
+    groundProps.forEach((o) => {
+      const dd = o.position.clone().normalize();
+      o.position.copy(dd).multiplyScalar(PLANET_R + terrainHeight(dd));
+    });
 
     // ---------- Character (low-poly humanoid, joint-based rig) ----------
     const jacketMat = new THREE.MeshToonMaterial({ color: "#c1503f", gradientMap });
@@ -2413,6 +2485,16 @@ export default function PlanetDemo() {
       snapOutCam = true;
     };
     if (TEST_PARTNER) window.__dbg = () => ({ t: terrainHeight(charDir), s: seaSurfaceH(charDir), seaTris: seaGeo.attributes.position.count / 3, cam: camera.position.length() - PLANET_R, ch: character.position.length() - PLANET_R });
+    if (TEST_PARTNER) window.__tpVillage = (i, dist = 24, pitch = 0.75, spin = 0) => {
+      const vc = VILLAGES[i % VILLAGES.length];
+      const ref = Math.abs(vc.y) < 0.9 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
+      const t = new THREE.Vector3().crossVectors(ref, vc).normalize().applyAxisAngle(vc, spin);
+      charDir = vc.clone().addScaledVector(t, dist / PLANET_R).normalize();
+      const toC = vc.clone().sub(charDir);
+      facing.copy(toC.addScaledVector(charDir, -toC.dot(charDir)).normalize());
+      camPitch = pitch;
+      snapOutCam = true;
+    };
     if (TEST_PARTNER) window.__tpPlace = (i) => { const pl = places[i]; if (!pl) return places.length; charDir = pl.dir.clone().addScaledVector(facing, -0.02).normalize(); return places.length; };
     const placeHint = document.createElement("div");
     Object.assign(placeHint.style, { position: "absolute", bottom: "34px", left: "50%", transform: "translateX(-50%)", font: "14px system-ui, sans-serif", color: "#fff", background: "rgba(35,40,38,0.55)", padding: "7px 16px", borderRadius: "16px", zIndex: 22, pointerEvents: "none", opacity: "0", transition: "opacity .3s", whiteSpace: "nowrap" });
@@ -2808,7 +2890,7 @@ export default function PlanetDemo() {
       if (actionRequested && nearBuilding) enterBuilding(nearBuilding);
       actionRequested = false;
 
-      const camDist = 6.5;
+      const camDist = (TEST_PARTNER && window.__camDist) || 6.5;
       const behind = facing.clone().multiplyScalar(-Math.cos(camPitch) * camDist);
       const above = charDir.clone().multiplyScalar(Math.sin(camPitch) * camDist + 1.4);
       const desiredCamPos = charPos.clone().add(behind).add(above);
