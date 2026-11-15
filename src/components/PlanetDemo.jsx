@@ -5,6 +5,7 @@ import { createAudio } from "../lib/audio.js";
 import { connectRelay } from "../lib/net.js";
 import { PLAYER_TINTS, applyPlayerTint } from "../lib/characterTint.js";
 import * as SkeletonUtils from "three/examples/jsm/utils/SkeletonUtils.js";
+import { mergeVertices } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 
 // Draws N copies of a loaded model with ONE draw call (InstancedMesh) instead of N clones.
 function extractInstanceSources(gltf) {
@@ -248,23 +249,51 @@ export default function PlanetDemo() {
     const rockC = new THREE.Color(PALETTE.rock);
     const snowC = new THREE.Color(PALETTE.snow);
 
-    const planetGeo = new THREE.IcosahedronGeometry(PLANET_R, 40);
+    // Terreno: piu' dettaglio, vertici condivisi (ombreggiatura morbida invece delle faccette),
+    // colori per altezza sull'acqua, pendenza (roccia sui ripidi) e macchie di erba chiara/scura.
+    const icoSrc = new THREE.IcosahedronGeometry(PLANET_R, 56);
+    icoSrc.deleteAttribute("normal");
+    icoSrc.deleteAttribute("uv");
+    const planetGeo = mergeVertices(icoSrc, 1e-3);
+    icoSrc.dispose();
     const posAttr = planetGeo.attributes.position;
     const dir = new THREE.Vector3();
-    const colors = [];
     const tmpColor = new THREE.Color();
+    const heights = new Float32Array(posAttr.count);
     for (let i = 0; i < posAttr.count; i++) {
       dir.set(posAttr.getX(i), posAttr.getY(i), posAttr.getZ(i)).normalize();
       const h = terrainHeight(dir);
+      heights[i] = h;
       posAttr.setXYZ(i, dir.x * (PLANET_R + h), dir.y * (PLANET_R + h), dir.z * (PLANET_R + h));
-      if (h < SEA_LEVEL + 0.35) tmpColor.copy(sandC);
-      else if (h < 1.1) tmpColor.copy(sandC).lerp(grassC, smoothstep(SEA_LEVEL + 0.35, 1.1, h));
-      else if (h < 3.4) tmpColor.copy(grassC).lerp(rockC, smoothstep(2.6, 3.4, h));
-      else tmpColor.copy(rockC).lerp(snowC, smoothstep(5.6, 6.6, h));
-      colors.push(tmpColor.r, tmpColor.g, tmpColor.b);
     }
-    planetGeo.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
     planetGeo.computeVertexNormals();
+    const nrmAttr = planetGeo.attributes.normal;
+    const grassLightC = grassC.clone().lerp(new THREE.Color("#c9c27a"), 0.5);
+    const grassDarkC = grassC.clone().lerp(new THREE.Color("#3f5e46"), 0.45);
+    const dirtC = sandC.clone().lerp(new THREE.Color("#8a7458"), 0.55);
+    const colors = new Float32Array(posAttr.count * 3);
+    const nrm = new THREE.Vector3();
+    for (let i = 0; i < posAttr.count; i++) {
+      dir.set(posAttr.getX(i), posAttr.getY(i), posAttr.getZ(i)).normalize();
+      nrm.set(nrmAttr.getX(i), nrmAttr.getY(i), nrmAttr.getZ(i));
+      const h = heights[i];
+      const above = h - seaSurfaceH(dir); // altezza sopra l'acqua: la sabbia segue la riva vera
+      const steep = 1 - nrm.dot(dir); // 0 piano, cresce sui pendii
+      // macchie morbide (due frequenze) per non avere fasce uniformi
+      const patch = 0.5 + 0.5 * Math.sin(dir.x * 19 + Math.sin(dir.y * 13) * 2.2) * Math.sin(dir.z * 17 + dir.y * 9 + 1.3);
+      const fine = 0.5 + 0.5 * Math.sin(dir.x * 71 + dir.y * 53) * Math.sin(dir.z * 67 - dir.x * 31);
+      tmpColor.copy(grassDarkC).lerp(grassLightC, smoothstep(0.25, 0.85, patch * 0.8 + fine * 0.2));
+      if (above < 0.9) tmpColor.lerp(sandC, 1 - smoothstep(0.35, 0.9, above));
+      if (above < 0) tmpColor.copy(sandC).multiplyScalar(0.8); // fondale
+      // terra smossa sui pendii medi, roccia su quelli ripidi e in quota
+      tmpColor.lerp(dirtC, smoothstep(0.05, 0.12, steep) * 0.6);
+      tmpColor.lerp(rockC, Math.max(smoothstep(0.12, 0.22, steep), smoothstep(2.8, 3.6, h)));
+      if (h > 5.4) tmpColor.lerp(snowC, smoothstep(5.6, 6.6, h) * (1 - smoothstep(0.15, 0.3, steep)));
+      colors[i * 3] = tmpColor.r;
+      colors[i * 3 + 1] = tmpColor.g;
+      colors[i * 3 + 2] = tmpColor.b;
+    }
+    planetGeo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
     const planetMat = new THREE.MeshToonMaterial({ vertexColors: true, gradientMap });
     const planet = new THREE.Mesh(planetGeo, planetMat);
     planet.receiveShadow = true;
