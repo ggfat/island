@@ -1347,6 +1347,29 @@ export default function PlanetDemo() {
     const rMap = new THREE.MeshToonMaterial({ color: "#e6d8a8", gradientMap });
     const rNavy = new THREE.MeshToonMaterial({ color: "#2f4a63", gradientMap });
     const rIron = new THREE.MeshToonMaterial({ color: "#4a4a50", gradientMap });
+    // misure [larghezza x, profondita' z] dei mobili, per le collisioni
+    const PROP_SIZE = {
+      Table_Large: [2.85, 1.1], Bench: [2.78, 0.53], Chair_1: [0.58, 0.55], Stool: [0.47, 0.47], Barrel: [0.7, 0.7], Barrel_Apples: [0.7, 0.7],
+      Barrel_Holder: [1.36, 0.74], Cauldron: [0.99, 0.94], Crate_Wooden: [0.84, 0.91], Bookcase_2: [1.46, 0.43], BookStand: [0.51, 0.51],
+      Bed_Twin1: [1.88, 2.41], Bed_Twin2: [1.88, 2.41], Nightstand_Shelf: [0.69, 0.39], Chest_Wood: [1.28, 0.76], Cabinet: [1.36, 0.36], Book_Stack_1: [0.28, 0.23],
+    };
+    const propCache = new Map();
+    const propMats = new Map();
+    function loadProp(name) {
+      if (!propCache.has(name)) {
+        propCache.set(name, loadModelT(`/models/props/${name}.gltf`).then((gltf) => {
+          if (!gltf) return null;
+          gltf.scene.traverse((o) => {
+            if (!o.isMesh) return;
+            const old = o.material;
+            if (!propMats.has(old.uuid)) propMats.set(old.uuid, new THREE.MeshToonMaterial({ color: old.color, map: old.map, gradientMap }));
+            o.material = propMats.get(old.uuid);
+          });
+          return gltf.scene;
+        }));
+      }
+      return propCache.get(name);
+    }
     Object.entries(ROOM_SPECS).forEach(([key, { W, D, H }]) => {
       const th = THEMES[key];
       const wallM = new THREE.MeshToonMaterial({ color: th.wall, gradientMap });
@@ -1364,14 +1387,6 @@ export default function PlanetDemo() {
       const cyl = (r, h, mat, x, y, z, seg = 12) => add(new THREE.CylinderGeometry(r, r, h, seg), mat, x, y, z);
       const colliders = [];
       const col = (x, z, r) => colliders.push({ x, z, r });
-      const table = (tx, tz, r) => {
-        cyl(r, 0.08, rWood, tx, 0.78, tz, 16);
-        cyl(0.09, 0.75, rWood, tx, 0.38, tz, 8);
-        col(tx, tz, r + 0.05);
-      };
-      const stool = (x, z) => { cyl(0.22, 0.45, rWood, x, 0.22, z, 10); col(x, z, 0.26); };
-      const barrel = (x, z) => { cyl(0.38, 0.85, rWood, x, 0.42, z, 12); cyl(0.39, 0.06, rDark, x, 0.25, z, 12); cyl(0.39, 0.06, rDark, x, 0.62, z, 12); col(x, z, 0.42); };
-      const chest = (x, z) => { box(0.9, 0.5, 0.55, rWood, x, 0.25, z); box(0.94, 0.08, 0.59, rGold, x, 0.52, z); col(x, z, 0.6); };
 
       // guscio comune: pavimento, pareti, porta d'uscita sul fondo
       box(W + 0.4, 0.3, D + 0.4, floorM, 0, -0.15, 0);
@@ -1382,84 +1397,96 @@ export default function PlanetDemo() {
       box(1.0, DOOR_H, 0.14, rWood, 0, DOOR_H / 2, -D / 2 + 0.05);
       box(1.2, 0.03, 0.7, rRug, 0, 0.02, -D / 2 + 0.55);
 
+      // arredi veri (Fantasy Props MegaKit): P(nome, x, z, rotazione, altezza). Front dei modelli = +Z.
+      // Parete di fondo (porta d'uscita) a z=-D/2; sinistra x=-W/2 (rot +PI/2); destra x=+W/2 (rot -PI/2).
+      const P = (name, x, z, rot = 0, y = 0, solid = true) => {
+        const sz = PROP_SIZE[name];
+        if (solid && sz) {
+          const sw = Math.abs(Math.cos(rot)) * sz[0] + Math.abs(Math.sin(rot)) * sz[1];
+          const sd = Math.abs(Math.sin(rot)) * sz[0] + Math.abs(Math.cos(rot)) * sz[1];
+          // pezzi lunghi: piu' cerchi in fila
+          const long = Math.max(sw, sd), short = Math.min(sw, sd);
+          const n = Math.max(1, Math.round(long / Math.max(short, 0.5)));
+          for (let i = 0; i < n; i++) {
+            const t = n === 1 ? 0 : i / (n - 1) - 0.5;
+            const off = t * (long - short);
+            col(x + (sw >= sd ? off : 0), z + (sw >= sd ? 0 : off), short / 2 + 0.12);
+          }
+        }
+        loadProp(name).then((src) => {
+          if (!src) return;
+          const o = src.clone();
+          o.position.set(x, y, z);
+          o.rotation.y = rot;
+          g.add(o);
+        });
+      };
+      const R = Math.PI / 2;
       if (key === "large") {
-        // TAVERNA: bancone, botti, camino, tavoli rotondi con sgabelli, tappeto lungo
+        // TAVERNA: bancone, botti, camino, tavoloni con panche, lampadario
         [-1, 1].forEach((sd) => box(0.06, 1.0, 1.3, winM, sd * (W / 2 - 0.02), H * 0.6, D * 0.25));
-        box(1.6, 0.03, 4.6, rRug, 0, 0.02, 0.5);
+        box(1.6, 0.03, 4.6, rRug, 0.4, 0.02, 0.5);
+        // bancone (resta procedurale) con boccali e piatti sopra
         box(0.8, 1.05, 4.4, rWood, W / 2 - 1.1, 0.52, -0.2);
         box(0.95, 0.08, 4.55, rDark, W / 2 - 1.1, 1.08, -0.2);
         for (let i = 0; i < 4; i++) col(W / 2 - 1.1, -2.1 + i * 1.3, 0.7);
-        [-1.7, -0.5, 0.7, 1.9].forEach((z, i) => { barrel(W / 2 - 0.5, z - 0.2 + (i % 2) * 0.1); });
-        box(3.2, 0.1, 0.3, rWood, W / 2 - 0.3, 2.2, -0.2);
-        [-1, 0, 1].forEach((o) => cyl(0.12, 0.3, rGold, W / 2 - 0.35, 2.4, -0.2 + o * 1.0, 8));
-        // camino
+        [-1.6, -0.6, 0.6, 1.5].forEach((z, i) => P(i % 2 ? "Table_Plate" : "Mug", W / 2 - 1.1, z, i, 1.12, false));
+        [-1.4, -0.4, 0.6, 1.6].forEach((z, i) => P(i === 2 ? "Barrel_Apples" : "Barrel", W / 2 - 0.42, z, i * 0.7));
+        P("Barrel_Holder", W / 2 - 1.0, -D / 2 + 0.5, 0);
+        // camino (procedurale) con calderone davanti
         box(0.6, 1.7, 2.0, rStone, -W / 2 + 0.35, 0.85, -D * 0.12);
         box(0.12, 0.7, 1.1, rFire, -W / 2 + 0.68, 0.4, -D * 0.12);
         box(0.7, 0.15, 2.2, rDark, -W / 2 + 0.35, 1.75, -D * 0.12);
         col(-W / 2 + 0.5, -D * 0.12 - 0.6, 0.8); col(-W / 2 + 0.5, -D * 0.12 + 0.6, 0.8);
-        // tavoli
-        [[-2.2, 1.0], [-2.2, -1.4], [0.6, 2.2]].forEach(([tx, tz]) => {
-          table(tx, tz, 0.75);
-          [0, 2.1, 4.2].forEach((a) => stool(tx + Math.cos(a) * 1.1, tz + Math.sin(a) * 1.1));
+        P("Cauldron", -W / 2 + 1.35, -D * 0.12, 0);
+        // due tavoloni con panche
+        [[-1.0, 1.6], [-1.2, -1.6]].forEach(([tx, tz]) => {
+          P("Table_Large", tx, tz, 0);
+          P("Bench", tx, tz - 0.95, 0); P("Bench", tx, tz + 0.95, Math.PI);
         });
-        // lanterne appese
-        [[-2.2, 0], [1.2, 1.0]].forEach(([x, z]) => { cyl(0.02, 0.8, rDark, x, H - 0.4, z, 4); cyl(0.17, 0.3, rFire, x, H - 0.95, z, 8); });
+        P("Chandelier", -1.1, 0, 0, H);
+        // parete di fondo: mensola con bottiglie, lanterne, stendardo
+        P("Shelf_Simple", -2.6, -D / 2 + 0.02, 0, 1.75, false);
+        P("SmallBottles_1", -2.8, -D / 2 + 0.2, 0, 1.78, false);
+        P("Lantern_Wall", -1.4, -D / 2 + 0.02, 0, 1.3, false); P("Lantern_Wall", 1.4, -D / 2 + 0.02, 0, 1.3, false);
+        P("Banner_1", 2.6, -D / 2 + 0.05, 0, 3.2, false);
+        P("Crate_Wooden", -W / 2 + 0.6, D / 2 - 0.7, 0.3); P("Barrel_Apples", -W / 2 + 1.5, D / 2 - 0.6, 0);
       } else if (key === "small") {
-        // STUDIO DEL TORRIONE: librerie, scrivania con mappamondo, telescopio, poltrona
+        // STUDIO: librerie, leggio con libri, letto, baule, pozioni
         [-1, 1].forEach((sd) => box(0.06, 0.9, 0.9, winM, sd * (W / 2 - 0.02), H * 0.62, -D * 0.1));
-        // librerie alte lungo la parete sinistra
-        box(0.45, 2.5, 3.2, rWood, -W / 2 + 0.3, 1.25, 0.1);
-        const bookMats = [rRed, rBlue, rGreen, rGold, rCloth, rRug];
-        for (let row = 0; row < 4; row++) for (let i = 0; i < 6; i++) box(0.3, 0.38, 0.14, bookMats[(row * 3 + i) % 6], -W / 2 + 0.55, 0.45 + row * 0.6, -1.3 + i * 0.52);
-        col(-W / 2 + 0.4, -1.0, 0.7); col(-W / 2 + 0.4, 0.1, 0.7); col(-W / 2 + 0.4, 1.2, 0.7);
-        // scrivania + mappamondo + candela
-        box(1.5, 0.08, 0.8, rWood, 0.9, 0.8, 0.9);
-        box(0.08, 0.78, 0.7, rWood, 0.2, 0.39, 0.9); box(0.08, 0.78, 0.7, rWood, 1.6, 0.39, 0.9);
-        add(new THREE.SphereGeometry(0.22, 12, 10), rBlue, 1.25, 1.1, 0.9);
-        cyl(0.04, 0.2, rGold, 1.25, 0.9, 0.9, 6);
-        cyl(0.04, 0.2, rCloth, 0.6, 0.94, 0.85, 6); box(0.05, 0.05, 0.05, rFire, 0.6, 1.07, 0.85);
-        col(0.9, 0.9, 0.95);
-        // poltrona
-        box(0.8, 0.45, 0.8, rRed, 0.9, 0.22, 1.75); box(0.8, 0.7, 0.2, rRed, 0.9, 0.6, 2.0);
-        col(0.9, 1.75, 0.55);
-        // telescopio sul treppiede
-        [0, 2.1, 4.2].forEach((a) => { const m = cyl(0.03, 1.2, rWood, 1.55 + Math.cos(a) * 0.2, 0.55, -0.9 + Math.sin(a) * 0.2, 5); m.rotation.z = Math.cos(a) * 0.2; m.rotation.x = Math.sin(a) * 0.2; });
-        const tel = cyl(0.07, 1.3, rGold, 1.55, 1.4, -0.9, 8); tel.rotation.z = 0.9;
-        col(1.55, -0.9, 0.4);
-        // tappeto rotondo
-        cyl(1.0, 0.03, rBlue, -0.3, 0.02, 0.4, 20);
-        // letto piccolo nell'angolo
-        box(0.95, 0.4, 1.9, rWood, -W / 2 + 1.2, 0.2, -D / 2 + 1.3); box(0.85, 0.16, 1.5, rCloth, -W / 2 + 1.2, 0.46, -D / 2 + 1.4);
-        col(-W / 2 + 1.2, -D / 2 + 1.0, 0.75); col(-W / 2 + 1.2, -D / 2 + 1.8, 0.75);
+        cyl(1.0, 0.03, rBlue, -0.3, 0.02, 0.6, 20);
+        P("Bookcase_2", -W / 2 + 0.25, -1.0, R); P("Bookcase_2", -W / 2 + 0.25, 0.6, R);
+        P("Bed_Twin1", W / 2 - 1.0, -D / 2 + 1.25, 0);
+        P("Chest_Wood", W / 2 - 1.0, 0.75, Math.PI);
+        P("Scroll_1", W / 2 - 1.1, 0.75, 0.4, 0.72, false);
+        P("Nightstand_Shelf", 0.75, -D / 2 + 0.3, 0);
+        P("CandleStick_Triple", 0.75, -D / 2 + 0.3, 0, 1.22, false);
+        P("BookStand", -0.6, 1.2, Math.PI * 0.8);
+        P("Chair_1", 0.4, 1.4, -2.3);
+        P("Book_Stack_1", -1.4, 1.75, 0.5);
+        P("Shelf_Small_Bottles", W / 2 - 0.02, 1.4, -R, 1.3, false);
       } else {
-        // CABINA DEL CAPITANO: oblò, tavolo con carta nautica, amache, timone, barili e bauli
+        // CABINA DEL CAPITANO: oblo', tavolo con carta, letto, timone, barili e bauli
         [-1, 1].forEach((sd) => [-1.3, 0.9].forEach((z) => { const o = cyl(0.42, 0.08, rGold, sd * (W / 2 - 0.02), H * 0.6, z, 16); o.rotation.z = Math.PI / 2; const o2 = cyl(0.34, 0.1, winM, sd * (W / 2 - 0.03), H * 0.6, z, 16); o2.rotation.z = Math.PI / 2; }));
-        // tavolo con carta nautica
-        box(2.1, 0.1, 1.2, rWood, 0.3, 0.8, 0.5);
-        box(0.1, 0.78, 0.1, rWood, -0.65, 0.39, 0.1); box(0.1, 0.78, 0.1, rWood, 1.25, 0.39, 0.1);
-        box(0.1, 0.78, 0.1, rWood, -0.65, 0.39, 0.9); box(0.1, 0.78, 0.1, rWood, 1.25, 0.39, 0.9);
-        box(1.5, 0.02, 0.9, rMap, 0.3, 0.87, 0.5); box(0.3, 0.025, 0.04, rRed, 0.1, 0.88, 0.4);
-        cyl(0.05, 0.25, rGold, 0.9, 0.98, 0.7, 8);
-        col(0.3, 0.5, 1.15);
-        [-0.9, 1.5].forEach((x) => stool(x, 0.5));
-        // amache (due letti a rete sospesi)
-        [[-W / 2 + 0.75, -0.4], [-W / 2 + 0.75, 1.5]].forEach(([x, z]) => {
-          cyl(0.04, 1.9, rDark, x, 0.95, z - 0.55, 6); cyl(0.04, 1.9, rDark, x, 0.95, z + 0.55, 6);
-          box(0.8, 0.12, 1.6, rCloth, x, 0.85, z); box(0.7, 0.14, 0.4, rBlue, x, 0.98, z - 0.6);
-          col(x, z, 0.7);
-        });
-        // timone al muro destro
+        box(2.4, 0.03, 1.6, rNavy, 0.4, 0.02, 1.6);
+        P("Table_Large", 0.4, 0.4, 0);
+        box(1.3, 0.02, 0.8, rMap, 0.4, 0.82, 0.4);
+        P("Scroll_2", 1.3, 0.3, 0.3, 0.81, false); P("CandleStick_Triple", -0.6, 0.5, 0, 0.81, false);
+        P("Chair_1", -0.2, -0.45, 0); P("Chair_1", 1.0, 1.25, Math.PI);
+        P("Bed_Twin2", -W / 2 + 1.25, 1.4, R);
+        // timone al muro destro (procedurale)
         const wheel = add(new THREE.TorusGeometry(0.55, 0.07, 8, 16), rWood, W / 2 - 0.2, 1.7, -D * 0.2);
         wheel.rotation.y = Math.PI / 2;
         for (let i = 0; i < 4; i++) { const sp = box(0.06, 1.1, 0.06, rWood, W / 2 - 0.2, 1.7, -D * 0.2); sp.rotation.x = (i * Math.PI) / 4; }
         cyl(0.08, 0.7, rWood, W / 2 - 0.25, 1.35, -D * 0.2, 8).rotation.z = Math.PI / 2;
-        // barili e bauli, bandiera
-        barrel(W / 2 - 0.55, D * 0.25); barrel(W / 2 - 0.55, D * 0.25 + 0.8);
-        chest(W / 2 - 0.75, D * 0.05 - 0.2); box(0.04, 0.5, 0.9, rRed, 0, H - 0.7, -D / 2 + 0.07);
-        // rotolo di corda
-        const rope = add(new THREE.TorusGeometry(0.3, 0.09, 6, 14), rCloth, -W / 2 + 0.9, 0.12, D / 2 - 0.9); rope.rotation.x = Math.PI / 2;
-        col(-W / 2 + 0.9, D / 2 - 0.9, 0.45);
-        box(2.4, 0.03, 1.6, rNavy, 0.3, 0.02, 1.7);
+        P("Barrel", W / 2 - 0.5, D / 2 - 0.6, 0); P("Barrel", W / 2 - 0.5, D / 2 - 1.4, 1);
+        P("Chest_Wood", W / 2 - 0.5, 0.35, -R);
+        P("Crate_Wooden", -W / 2 + 0.6, -D / 2 + 0.6, 0.2);
+        P("Cabinet", 1.9, -D / 2 + 0.2, 0);
+        P("Peg_Rack", -1.6, -D / 2 + 0.03, 0, 1.8, false);
+        P("Lantern_Wall", 0.9, -D / 2 + 0.02, 0, 1.3, false);
+        P("Rope_1", -W / 2 + 0.8, D / 2 - 0.5, 0, 0, false);
+        box(0.04, 0.5, 0.9, rRed, -0.9, H - 0.7, -D / 2 + 0.07);
       }
       scene.add(g);
       rooms[key] = { key, group: g, W, D, H, colliders };
@@ -2604,6 +2631,7 @@ export default function PlanetDemo() {
     if (TEST_PARTNER) window.__info = () => ({ villages: VILLAGES.length, buildings: buildings.length, trees: decor.tree.length, places: places.length });
     // test: mi porto sulla riva del mare i, guardando verso il largo (k = direzione di uscita)
     if (TEST_PARTNER) window.__q = () => ({ level: quality.level, mode: quality.mode, n: quality.frameTimes.length, cd: quality.cooldown, hidden: document.hidden });
+    if (TEST_PARTNER) window.__enter = (key) => { const b = buildings.find((x) => x.roomKey === key); if (b) enterBuilding(b); return !!b; };
     if (TEST_PARTNER) window.__pitch = (v) => { camPitch = v; };
     if (TEST_PARTNER) window.__tpSea = (i, k = 0, back = 4) => {
       const c = SEA_CENTERS[i % SEA_CENTERS.length];
@@ -2706,8 +2734,21 @@ export default function PlanetDemo() {
       }
     }
 
+    // dentro una casa nascondo il mondo esterno (alberi e case dietro la stanza si vedevano nel buio)
+    const hiddenOutdoor = [];
+    function setOutdoorHidden(hide) {
+      if (hide) {
+        const keep = new Set([stage, roomLight, character, camera, sun, hemi, ...Object.values(rooms).map((r) => r.group)]);
+        remotes.forEach((r) => keep.add(r.root));
+        scene.children.forEach((c) => { if (!keep.has(c) && c.visible && !c.isLight) { c.visible = false; hiddenOutdoor.push(c); } });
+      } else {
+        hiddenOutdoor.forEach((c) => (c.visible = true));
+        hiddenOutdoor.length = 0;
+      }
+    }
     function enterBuilding(b) {
       const room = rooms[b.roomKey];
+      setOutdoorHidden(true);
       const centerDir = b.pos.clone().normalize();
       const out = b.exitDir.clone().sub(centerDir);
       out.addScaledVector(b.exitDir, -out.dot(b.exitDir)).normalize();
@@ -2734,6 +2775,7 @@ export default function PlanetDemo() {
       Object.values(rooms).forEach((r) => (r.group.visible = false));
       stage.visible = false;
       roomLight.intensity = 0;
+      setOutdoorHidden(false);
       inside = null;
       audio.exit();
       jumpHeight = 0;

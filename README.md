@@ -136,3 +136,8 @@ Il relay espone anche `GET /room/CODICE` (stessa porta, CORS aperto o `ALLOWED_O
 ## Seed del mondo
 
 La forma del pianeta (mari, montagne, colline, posizione di alberi, villaggi e luoghi) deriva dal codice del mondo: lo stesso codice dà sempre lo stesso mondo su tutti i dispositivi. Chi crea un mondo genera il codice nel browser e lo propone al relay (`mode=create&room=CODICE`, 8 caratteri dell'alfabeto senza ambigui); se esiste già il relay risponde `exists`. Il punto di partenza resta sempre terraferma.
+
+## Grafica e interni
+
+- Menu ☰ → 🖥️ Grafica: Auto (predefinito), Alta, Media, Bassa, Minima. In Auto il gioco misura la fluidità ogni ~3 s e scende di livello sotto i 27 fps (risolve risoluzione, ombre, cespugli); ricorda il livello scelto. I modelli veri restano sempre.
+- Interni arredati con il Fantasy Props MegaKit di Quaternius (CC0), in `public/models/props/` (solo texture di colore, ridotte a 512 px). Dentro una casa il mondo esterno viene nascosto.
