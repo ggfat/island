@@ -1214,7 +1214,9 @@ export default function PlanetDemo() {
     // terreno definitivo: piazzole livellate + piazze; poi riallineo al suolo cio' che era gia' appoggiato
     refreshTerrain(true);
     // sentieri: nastri che seguono il terreno, con bordi sfumati (niente piu' scalini della griglia)
-    {
+    let roadMesh = null;
+    function buildRoadRibbons() {
+      if (roadMesh) { scene.remove(roadMesh); roadMesh.geometry.dispose(); roadMesh = null; }
       const rp = [], rc = [], ri = [];
       const coreC = new THREE.Color(BIOME.pathCore), edgeC = new THREE.Color(BIOME.pathEdge);
       const tmpD = new THREE.Vector3(), tan = new THREE.Vector3(), side = new THREE.Vector3();
@@ -1258,12 +1260,15 @@ export default function PlanetDemo() {
         rg.setIndex(ri);
         rg.computeVertexNormals();
         const rm = new THREE.MeshToonMaterial({ vertexColors: true, gradientMap, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
-        const roadMesh = new THREE.Mesh(rg, rm);
+        roadMesh = new THREE.Mesh(rg, rm);
         roadMesh.receiveShadow = true;
         roadMesh.renderOrder = 1;
         scene.add(roadMesh);
       }
     }
+    buildRoadRibbons();
+    // riappoggia al suolo cio' che era gia' piazzato (dopo che il terreno e' stato livellato)
+    function resnapGround() {
     ["tree", "bush", "rock"].forEach((k) => decor[k].forEach((it) => {
       const r0 = it.pos.length();
       const dd = it.pos.clone().normalize();
@@ -1276,6 +1281,8 @@ export default function PlanetDemo() {
       const dd = o.position.clone().normalize();
       o.position.copy(dd).multiplyScalar(PLANET_R + terrainHeight(dd));
     });
+    }
+    resnapGround();
 
     // ---------- Character (low-poly humanoid, joint-based rig) ----------
     const jacketMat = new THREE.MeshToonMaterial({ color: "#c1503f", gradientMap });
@@ -1556,6 +1563,10 @@ export default function PlanetDemo() {
     const rIron = new THREE.MeshToonMaterial({ color: "#4a4a50", gradientMap });
     // misure [larghezza x, profondita' z] dei mobili, per le collisioni
     const PROP_SIZE = {
+      "scifi/Prop_Desk_Medium.gltf": [2.84, 1.03], "scifi/Prop_Desk_L.gltf": [2.22, 2.22], "scifi/Prop_Chair.gltf": [0.88, 1.12], "scifi/Prop_Crate_Large.gltf": [3.47, 1.5],
+      "scifi/Prop_Crate.gltf": [1.57, 1.5], "scifi/Prop_Crate_Tarp.gltf": [1.72, 1.71], "scifi/Prop_Barrel1.gltf": [0.72, 0.65], "scifi/Prop_Barrel2_Closed.gltf": [0.54, 0.54],
+      "scifi/Prop_Locker.gltf": [0.98, 0.5], "scifi/Prop_Shelves_WideTall.gltf": [1.98, 0.54], "scifi/Prop_Shelves_ThinShort.gltf": [1.37, 0.54], "scifi/Prop_Chest.gltf": [1.84, 1.37],
+      "scifi/machine_generator.glb": [1.1, 0.85], "scifi/machine_barrel.glb": [0.8, 0.65],
       Table_Large: [2.85, 1.1], Bench: [2.78, 0.53], Chair_1: [0.58, 0.55], Stool: [0.47, 0.47], Barrel: [0.7, 0.7], Barrel_Apples: [0.7, 0.7],
       Barrel_Holder: [1.36, 0.74], Cauldron: [0.99, 0.94], Crate_Wooden: [0.84, 0.91], Bookcase_2: [1.46, 0.43], BookStand: [0.51, 0.51],
       Bed_Twin1: [1.88, 2.41], Bed_Twin2: [1.88, 2.41], Nightstand_Shelf: [0.69, 0.39], Chest_Wood: [1.28, 0.76], Cabinet: [1.36, 0.36], Book_Stack_1: [0.28, 0.23],
@@ -1580,8 +1591,18 @@ export default function PlanetDemo() {
       }
       return propCache.get(name);
     }
+    const ALIEN_IN = biomeKey === "alien";
+    const ALIEN_THEMES = {
+      large: { wall: "#cfd6e2", floor: "#4a5262", win: "#7fe0ff" },
+      small: { wall: "#d9d3e6", floor: "#3f4658", win: "#b58cff" },
+      medium: { wall: "#c4d7da", floor: "#3c4a52", win: "#8affc1" },
+    };
+    const aMetal = new THREE.MeshToonMaterial({ color: "#7d8796", gradientMap });
+    const aDark = new THREE.MeshToonMaterial({ color: "#2b3140", gradientMap });
+    const aSpace = new THREE.MeshBasicMaterial({ color: "#1b1640" });
+    if (ALIEN_IN) roomLight.color.set("#dfeaff");
     Object.entries(ROOM_SPECS).forEach(([key, { W, D, H }]) => {
-      const th = THEMES[key];
+      const th = (ALIEN_IN ? ALIEN_THEMES : THEMES)[key];
       const wallM = new THREE.MeshToonMaterial({ color: th.wall, gradientMap });
       const floorM = new THREE.MeshToonMaterial({ color: th.floor, gradientMap });
       const winM = new THREE.MeshBasicMaterial({ color: th.win });
@@ -1603,13 +1624,24 @@ export default function PlanetDemo() {
       box(W + 0.4, H, 0.2, wallM, 0, H / 2, -D / 2 - 0.1);
       box(0.2, H, D + 0.4, wallM, -W / 2 - 0.1, H / 2, 0);
       box(0.2, H, D + 0.4, wallM, W / 2 + 0.1, H / 2, 0);
-      box(1.3, DOOR_H + 0.12, 0.12, rDark, 0, (DOOR_H + 0.12) / 2, -D / 2 + 0.02);
-      box(1.0, DOOR_H, 0.14, rWood, 0, DOOR_H / 2, -D / 2 + 0.05);
-      box(1.2, 0.03, 0.7, rRug, 0, 0.02, -D / 2 + 0.55);
+      if (ALIEN_IN) {
+        // portellone metallico con bordo luminoso e fasce di luce lungo le pareti
+        box(1.4, DOOR_H + 0.16, 0.12, winM, 0, (DOOR_H + 0.16) / 2, -D / 2 + 0.02);
+        box(1.2, DOOR_H, 0.14, aDark, 0, DOOR_H / 2, -D / 2 + 0.05);
+        box(0.06, DOOR_H * 0.8, 0.16, aMetal, 0, DOOR_H / 2, -D / 2 + 0.06);
+        box(W - 0.4, 0.06, 0.04, winM, 0, H - 0.35, -D / 2 + 0.01);
+        [-1, 1].forEach((sd) => box(0.04, 0.06, D - 0.4, winM, sd * (W / 2 - 0.01), H - 0.35, 0));
+        box(W + 0.4, 0.12, 0.2, aMetal, 0, 0.06, -D / 2 + 0.02);
+        box(1.4, 0.02, 0.9, aMetal, 0, 0.02, -D / 2 + 0.6);
+      } else {
+        box(1.3, DOOR_H + 0.12, 0.12, rDark, 0, (DOOR_H + 0.12) / 2, -D / 2 + 0.02);
+        box(1.0, DOOR_H, 0.14, rWood, 0, DOOR_H / 2, -D / 2 + 0.05);
+        box(1.2, 0.03, 0.7, rRug, 0, 0.02, -D / 2 + 0.55);
+      }
 
       // arredi veri (Fantasy Props MegaKit): P(nome, x, z, rotazione, altezza). Front dei modelli = +Z.
       // Parete di fondo (porta d'uscita) a z=-D/2; sinistra x=-W/2 (rot +PI/2); destra x=+W/2 (rot -PI/2).
-      const P = (name, x, z, rot = 0, y = 0, solid = true) => {
+      const P = (name, x, z, rot = 0, y = 0, solid = true, fit = 0) => {
         const sz = PROP_SIZE[name];
         if (solid && sz) {
           const sw = Math.abs(Math.cos(rot)) * sz[0] + Math.abs(Math.sin(rot)) * sz[1];
@@ -1623,16 +1655,70 @@ export default function PlanetDemo() {
             col(x + (sw >= sd ? off : 0), z + (sw >= sd ? 0 : off), short / 2 + 0.12);
           }
         }
-        loadProp(name).then((src) => {
+        (name.includes("/") ? loadToon(`/models/${name}`) : loadProp(name)).then((src) => {
           if (!src) return;
           const o = src.clone();
+          if (fit) {
+            // modelli con origine spostata (Kenney): porto alla misura voluta, centro e appoggio a terra
+            const inner = o; const wrap = new THREE.Group();
+            const bb = new THREE.Box3().setFromObject(inner);
+            const k = fit / Math.max(0.01, bb.max.x - bb.min.x, bb.max.z - bb.min.z);
+            inner.scale.multiplyScalar(k);
+            inner.position.set(-((bb.min.x + bb.max.x) / 2) * k, -bb.min.y * k, -((bb.min.z + bb.max.z) / 2) * k);
+            wrap.add(inner); wrap.position.set(x, y, z); wrap.rotation.y = rot; g.add(wrap); return;
+          }
           o.position.set(x, y, z);
           o.rotation.y = rot;
           g.add(o);
         });
       };
       const R = Math.PI / 2;
-      if (key === "large") {
+      // oblo' con vista sullo spazio (stelle) per gli interni alieni
+      const porthole = (x, y, z, rotY) => {
+        const o = new THREE.Group(); o.position.set(x, y, z); o.rotation.y = rotY; g.add(o);
+        const ring = new THREE.Mesh(new THREE.TorusGeometry(0.5, 0.07, 8, 24), aMetal); o.add(ring);
+        const glass = new THREE.Mesh(new THREE.CircleGeometry(0.47, 24), aSpace); glass.position.z = -0.01; o.add(glass);
+        for (let i = 0; i < 7; i++) { const st = new THREE.Mesh(new THREE.CircleGeometry(0.025, 5), winM); st.position.set((Math.random() - 0.5) * 0.7, (Math.random() - 0.5) * 0.7, 0); if (st.position.length() < 0.42) o.add(st); }
+      };
+      if (ALIEN_IN && key === "large") {
+        // MENSA DELLA BASE: tavoli con sedie, casse, armadietti, generatore
+        porthole(-W / 2 + 0.02, H * 0.58, -1.2, R); porthole(-W / 2 + 0.02, H * 0.58, 1.4, R); porthole(W / 2 - 0.02, H * 0.58, 0.2, -R);
+        [[-1.6, 1.0], [-1.6, -1.5]].forEach(([tx, tz]) => {
+          P("scifi/Prop_Desk_Medium.gltf", tx, tz, 0);
+          P("scifi/Prop_Chair.gltf", tx - 0.8, tz + 0.95, Math.PI); P("scifi/Prop_Chair.gltf", tx + 0.8, tz + 0.95, Math.PI);
+          P("scifi/Prop_Mug.gltf", tx - 0.5, tz, 0.4, 0.94, false);
+        });
+        P("scifi/Prop_Crate_Large.gltf", W / 2 - 0.85, 1.4, R);
+        P("scifi/Prop_Crate.gltf", W / 2 - 0.9, -1.6, 0.2); P("scifi/Prop_Crate_Tarp.gltf", -W / 2 + 1.0, D / 2 - 1.0, 0.3);
+        P("scifi/Prop_Barrel1.gltf", W / 2 - 0.5, -0.3, 0); P("scifi/Prop_Barrel2_Closed.gltf", W / 2 - 1.2, -0.4, 0);
+        P("scifi/Prop_Locker.gltf", 1.8, -D / 2 + 0.3, 0); P("scifi/Prop_Locker.gltf", 2.85, -D / 2 + 0.3, 0);
+        P("scifi/Prop_Shelves_WideTall.gltf", -2.4, -D / 2 + 0.3, 0);
+        P("scifi/machine_generator.glb", -W / 2 + 0.6, 0, R, 0, true, 1.1);
+        P("scifi/Prop_HealthPack.gltf", -1.1, -D / 2 + 0.03, 0, 1.4, false);
+      } else if (ALIEN_IN && key === "small") {
+        // LABORATORIO: scrivania ad angolo con terminale, scaffali, armadietto, baule
+        porthole(W / 2 - 0.02, H * 0.6, 0.6, -R);
+        P("scifi/Prop_Desk_L.gltf", W / 2 - 1.15, -D / 2 + 1.15, 0);
+        P("scifi/desk_computerScreen.glb", W / 2 - 0.9, -D / 2 + 0.45, 0, 0.94, false, 0.7);
+        P("scifi/desk_computer.glb", W / 2 - 0.45, -D / 2 + 1.2, -R, 0.94, false, 0.6);
+        P("scifi/Prop_Chair.gltf", W / 2 - 1.5, -D / 2 + 1.3, 2.4);
+        P("scifi/Prop_Shelves_ThinShort.gltf", -W / 2 + 0.3, -0.6, R);
+        P("scifi/Prop_Locker.gltf", -W / 2 + 0.3, 1.1, R);
+        P("scifi/Prop_Chest.gltf", -0.4, 1.4, Math.PI);
+        P("scifi/Prop_Barrel2_Closed.gltf", W / 2 - 0.45, 1.5, 0);
+        P("scifi/Prop_HealthPack.gltf", -1.2, -D / 2 + 0.03, 0, 1.4, false);
+      } else if (ALIEN_IN) {
+        // PLANCIA DI COMANDO: consolle con schermi davanti a un grande oblo', armadietti, casse
+        porthole(-W / 2 + 0.02, H * 0.55, -0.6, R); porthole(-W / 2 + 0.02, H * 0.55, 1.0, R);
+        P("scifi/Prop_Desk_Medium.gltf", -W / 2 + 0.75, 0.2, R);
+        P("scifi/desk_computerScreen.glb", -W / 2 + 0.55, -0.5, R, 0.94, false, 0.7);
+        P("scifi/desk_computerScreen.glb", -W / 2 + 0.55, 0.9, R, 0.94, false, 0.7);
+        P("scifi/Prop_Chair.gltf", -W / 2 + 1.75, 0.2, -R);
+        P("scifi/Prop_Locker.gltf", W / 2 - 0.3, -1.3, -R); P("scifi/Prop_Locker.gltf", W / 2 - 0.3, -0.3, -R);
+        P("scifi/Prop_Crate.gltf", W / 2 - 0.9, D / 2 - 0.9, 0.3);
+        P("scifi/machine_barrel.glb", 1.4, -D / 2 + 0.45, 0, 0, true, 0.8);
+        P("scifi/Prop_Barrel1.gltf", -1.6, -D / 2 + 0.5, 0);
+      } else if (key === "large") {
         // TAVERNA: bancone, botti, camino, tavoloni con panche, lampadario
         [-1, 1].forEach((sd) => box(0.06, 1.0, 1.3, winM, sd * (W / 2 - 0.02), H * 0.6, D * 0.25));
         box(1.6, 0.03, 4.6, rRug, 0.4, 0.02, 0.5);
@@ -2156,7 +2242,7 @@ export default function PlanetDemo() {
     const MAP_FULL = Math.PI * 0.995;
     const mapCanvas = document.createElement("canvas");
     mapCanvas.width = MAP_PX; mapCanvas.height = MAP_PX;
-    Object.assign(mapCanvas.style, { position: "absolute", top: "12px", left: "12px", width: MAP_PX + "px", height: MAP_PX + "px", borderRadius: "50%", border: "3px solid rgba(255,255,255,.75)", background: "#123", zIndex: 22, boxShadow: "0 2px 10px rgba(0,0,0,.3)" });
+    Object.assign(mapCanvas.style, { position: "absolute", top: "12px", left: "12px", width: MAP_PX + "px", height: MAP_PX + "px", borderRadius: "10px", border: "3px solid rgba(255,255,255,.75)", background: "#123", zIndex: 22, boxShadow: "0 2px 10px rgba(0,0,0,.3)" });
     mount.appendChild(mapCanvas);
     const mctx = mapCanvas.getContext("2d");
     const mapTmp = document.createElement("canvas");
@@ -2250,13 +2336,16 @@ export default function PlanetDemo() {
     function mapProject(d, limit) {
       const dp = d.dot(vC);
       const ang = Math.acos(Math.min(1, Math.max(-1, dp)));
-      if (ang > MAP_ANG * limit) return null;
+      if (ang > MAP_ANG * 1.42) return null;
       const Rm = MAP_PX / 2;
       mpT.copy(d).addScaledVector(vC, -dp);
       const tl = mpT.length();
       if (tl < 1e-5) return { x: Rm, y: Rm };
       const rr = (ang / MAP_ANG) * Rm;
-      return { x: Rm + (mpT.dot(mpR) / tl) * rr, y: Rm - (mpT.dot(vF) / tl) * rr };
+      const q = { x: Rm + (mpT.dot(mpR) / tl) * rr, y: Rm - (mpT.dot(vF) / tl) * rr };
+      const m = (1 - limit) * MAP_PX + 4; // margine dal bordo quadrato
+      if (q.x < m || q.y < m || q.x > MAP_PX - m || q.y > MAP_PX - m) return null;
+      return q;
     }
     function updateMinimap(dt) {
       mapTimer -= dt;
@@ -2270,7 +2359,7 @@ export default function PlanetDemo() {
           const px = ((i + 0.5) / MAP_RES) * 2 - 1, py = ((j + 0.5) / MAP_RES) * 2 - 1;
           const r = Math.hypot(px, py);
           const o = (j * MAP_RES + i) * 4;
-          if (r > 1) { mapImg.data[o + 3] = 0; continue; }
+          // mappa quadrata: si riempiono anche gli angoli (proiezione centrata sul giocatore)
           const ang = r * MAP_ANG;
           const k = r > 0.0001 ? Math.sin(ang) / r : 0;
           mpD.copy(vC).multiplyScalar(Math.cos(ang)).addScaledVector(mpR, px * k).addScaledVector(vF, -py * k).normalize();
@@ -2762,11 +2851,14 @@ export default function PlanetDemo() {
           }
           if (!ok) continue;
           const pl = newPlace(name, build);
-          const surf = getSurfacePoint(d);
           pl.dir = d.clone();
           pl.pid = bi;
-          pl.group.position.copy(surf.point);
-          pl.group.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), surf.normal);
+          // piazzola livellata: niente piu' oggetti mezzi sottoterra e mezzi in aria sui pendii.
+          // In testa all'elenco, cosi' le piazzole delle case (gia' presenti) restano prioritarie.
+          const padH = terrainHeight(d);
+          TERRAIN_PADS.unshift({ d: d.clone(), h: padH, cosIn: Math.cos((PLACE_RADIUS + 0.4) / PLANET_R), cosOut: Math.cos((PLACE_RADIUS + 2.6) / PLANET_R) });
+          pl.group.position.copy(d).multiplyScalar(PLANET_R + padH);
+          pl.group.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), d);
           scene.add(pl.group);
           obstacles.push({ dir: d.clone(), r: 1.6 / PLANET_R });
           // sgombero: niente alberi, rocce o cespugli dentro il luogo
@@ -2784,6 +2876,10 @@ export default function PlanetDemo() {
         }
       }
     }
+    // il terreno e' cambiato sotto i luoghi: aggiorno mesh, sentieri e oggetti appoggiati
+    refreshTerrain(true);
+    resnapGround();
+    buildRoadRibbons();
     if (TEST_PARTNER) window.__info = () => ({ villages: VILLAGES.length, buildings: buildings.length, trees: decor.tree.length, places: places.length });
     // test: mi porto sulla riva del mare i, guardando verso il largo (k = direzione di uscita)
     if (TEST_PARTNER) window.__q = () => ({ level: quality.level, mode: quality.mode, n: quality.frameTimes.length, cd: quality.cooldown, hidden: document.hidden });
