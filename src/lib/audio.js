@@ -109,7 +109,13 @@ export function createAudio() {
     start,
     toggle(name) { on[name] = !on[name]; applyBus(name); return on[name]; },
     isOn(name) { return on[name]; },
-    step(rough = 1) {
+    step(rough = 1, metal = false) {
+      if (metal) {
+        // passi su superficie metallica/cristallina: un "tic" piu' acuto e una piccola risonanza
+        burst(0.04, 2400 + Math.random() * 600, 0.07 * rough, "bandpass");
+        tone(520 + Math.random() * 60, 470, 0.09, 0.035 * rough, "triangle");
+        return;
+      }
       burst(0.06, 600 + Math.random() * 300, 0.1 * rough);
       tone(110 + Math.random() * 20, 60, 0.07, 0.07 * rough, "sine");
     },

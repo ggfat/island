@@ -90,6 +90,18 @@ let HILLS = [
   { v: new THREE.Vector3(0.7, 0.2, -0.6), f: 7.5, p: 1.3 },
   { v: new THREE.Vector3(-0.3, 0.8, 0.5), f: 9.1, p: 0.4 },
 ];
+// Pianeta alieno: crateri (bordo rialzato + conca) al posto delle colline, altipiani bassi al posto dei monti
+let TERRAIN_STYLE = "temperate";
+let CRATERS = [];
+function cratersAt(dir) {
+  let h = 0;
+  for (const c of CRATERS) {
+    const d = dir.angleTo(c.c) / c.r;
+    if (d > 1.6) continue;
+    h += (d < 1 ? -c.depth * (1 - d * d) : 0) + c.rim * Math.exp(-((d - 1) * (d - 1)) / 0.06);
+  }
+  return h;
+}
 function hillsAt(dir) {
   // colline morbide sparse su tutto il pianeta
   const a = Math.sin(dir.dot(HILLS[0].v) * HILLS[0].f + HILLS[0].p);
@@ -122,7 +134,10 @@ const SP = (n) => `/models/space/${n}.gltf`;
 const BIOMES = {
   temperate: {
     palette: { sand: "#c9b98f", grass: "#7c8b6f", rock: "#8c8880", snow: "#eef1ee", trunk: "#5c4b3a", foliage: "#4f6b52" },
-    sea: "#4f86a0", seaShallow: "#79bcc6", seaDeep: "#2f6d8c", seaFoam: "#eef7f4", skyTop: "#5f9fc7", skyHorizon: "#dce9e6", fog: "#bcd6d8", fogTint: "#ffffff",
+    sea: "#4f86a0", seaShallow: "#79bcc6", seaDeep: "#2f6d8c", seaFoam: "#eef7f4", seaGlow: null,
+    pathCore: "#c8b48c", pathEdge: "#a4916b", lamp: "#ffd98a", lampPost: "#3b3a3c", lowGravity: false, metalSteps: false, crystals: false, centerModel: null,
+    place: { stone: "#8a8782", wood: "#7a5636", water: "#6fc3e8" },
+    placeNames: null, skyTop: "#5f9fc7", skyHorizon: "#dce9e6", fog: "#bcd6d8", fogTint: "#ffffff",
     chars: ["Anne", "Henry", "Mako", "Captain_Barbarossa", "Skeleton", "Skeleton_Headless", "Sharky"].map((n) => `/models/characters/Characters_${n}.gltf`),
     charNames: ["Anne", "Henry", "Mako", "Barbarossa", "Scheletro", "Senza testa", "Sharky"],
     trees: ["/models/nature/CommonTree_2.gltf", "/models/nature/Pine_1.gltf"],
@@ -132,7 +147,10 @@ const BIOMES = {
   },
   alien: {
     palette: { sand: "#d9bfd0", grass: "#5f8a93", rock: "#7d6f93", snow: "#eae6ff", trunk: "#4a3a5c", foliage: "#3f7f86" },
-    sea: "#8a62c4", seaShallow: "#c49be8", seaDeep: "#4a2a86", seaFoam: "#f6e8ff", skyTop: "#6d4fa0", skyHorizon: "#f3c9dc", fog: "#d8b8d6", fogTint: "#f6dcea",
+    sea: "#8a62c4", seaShallow: "#c49be8", seaDeep: "#4a2a86", seaFoam: "#f6e8ff", seaGlow: "#6a2fc0",
+    pathCore: "#b7c0d4", pathEdge: "#6f7894", lamp: "#8ff3ff", lampPost: "#9aa3b8", lowGravity: true, metalSteps: true, crystals: true, centerModel: "/models/space/GeodesicDome.gltf",
+    place: { stone: "#9b7fd6", wood: "#8a93a8", water: "#e0b3ff" },
+    placeNames: ["Pozzo di luce", "Cerchio di cristalli", "Bilico orbitale", "Lanterne stellari", "Giardino luminoso", "Antenna cantante"], skyTop: "#6d4fa0", skyHorizon: "#f3c9dc", fog: "#d8b8d6", fogTint: "#f6dcea",
     chars: ["Astronaut_FinnTheFrog", "Astronaut_BarbaraTheBee", "Astronaut_FernandoTheFlamingo", "Astronaut_RaeTheRedPanda", "Enemy_Large"].map(SP),
     charNames: ["Finn", "Barbara", "Fernando", "Rae", "Zorp"],
     trees: ["Tree_Blob_1", "Tree_Spikes_1", "Tree_Lava_1", "Tree_Floating_1", "Tree_Swirl_1", "Tree_Light_1"].map(SP),
@@ -151,10 +169,27 @@ const BIOMES = {
 // altezze di riferimento dei nostri modelli: i modelli di altri biomi vengono portati alla stessa misura
 const DECOR_TARGET_H = { tree: 7.5, rock: 2.3, bush: 1.6 };
 const LEGACY_WORLD = { NOISE_WAVES, SEA_CENTERS, MOUNTAINS, HILLS };
-function configureWorld(code) {
+function configureWorld(code, style = "temperate") {
   TERRAIN_PADS = [];
-  if (!code) { ({ NOISE_WAVES, SEA_CENTERS, MOUNTAINS, HILLS } = LEGACY_WORLD); return; }
-  const R = mulberry32(hashStr(code));
+  TERRAIN_STYLE = style;
+  CRATERS = [];
+  if (!code) ({ NOISE_WAVES, SEA_CENTERS, MOUNTAINS, HILLS } = LEGACY_WORLD);
+  const R = mulberry32(hashStr(code || "legacy"));
+  const placeCraters = () => {
+  if (style === "alien") {
+      const START = new THREE.Vector3(0, 1, 0);
+      for (let i = 0, tries = 0; i < 9 && tries < 400; tries++) {
+        const c = new THREE.Vector3(R() * 2 - 1, R() * 2 - 1, R() * 2 - 1).normalize();
+        const r = 0.07 + R() * 0.11;
+        if (c.angleTo(START) < r + 0.12) continue;
+        if (SEA_CENTERS.some((sc) => c.angleTo(sc) < SEA_RADIUS + r)) continue;
+        if (CRATERS.some((o) => c.angleTo(o.c) < o.r + r + 0.04)) continue;
+        CRATERS.push({ c, r, depth: 0.9 + r * 6, rim: 0.35 + r * 2.5 });
+        i++;
+      }
+    }
+  };
+  if (!code) { placeCraters(); return; }
   const rv = () => new THREE.Vector3(R() * 2 - 1, R() * 2 - 1, R() * 2 - 1).normalize();
   const START = new THREE.Vector3(0, 1, 0); // il punto di partenza deve restare terra
   const pick = (margin, avoid = []) => {
@@ -170,6 +205,7 @@ function configureWorld(code) {
   const seaAvoid = SEA_CENTERS.map((c) => [c, SEA_RADIUS * 0.8]);
   MOUNTAINS = [[0.58, 8.0], [0.52, 7.0], [0.5, 6.2], [0.4, 5.0]].map(([r, h]) => ({ c: pick(r * 0.7 + 0.2, seaAvoid), r, h }));
   HILLS = [{ v: rv(), f: 7.5, p: R() * 6.28 }, { v: rv(), f: 9.1, p: R() * 6.28 }];
+  placeCraters();
 }
 // Superficie del mare piu' piatta del pianeta: verso il centro di ogni mare scende un po',
 // cosi' su un pianeta piccolo il mare non sembra una cupola. A riva coincide con SEA_LEVEL.
@@ -197,7 +233,9 @@ function terrainHeight(dir) {
 function baseTerrainHeight(dir) {
   const noise = noiseAt(dir);
   const mask = seaMask(dir);
-  const landH = noise * 0.55 + 1.0 + hillsAt(dir) + mountainAt(dir); // colline e montagne vere
+  const landH = TERRAIN_STYLE === "alien"
+    ? noise * 0.45 + 1.0 + cratersAt(dir) + mountainAt(dir) * 0.3 // crateri e altipiani (le guglie sono cristalli a parte)
+    : noise * 0.55 + 1.0 + hillsAt(dir) + mountainAt(dir); // colline e montagne vere
   const seaH = noise * 0.3 - 9.0; // fondale profondo: la superficie del mare scende verso il centro
   return landH * (1 - mask) + seaH * mask;
 }
@@ -244,8 +282,8 @@ export default function PlanetDemo() {
     const wcCodeFor = (biome) => { for (let i = 0; i < 200; i++) { const c = wcNewCode(); if (biomeOf(c) === biome) return c; } return wcNewCode(); };
     const wcSaved = wcTest || wcWantAlien ? null : wcGet("island_myroom");
     const worldCode = wcUrlRoom || wcSaved || (!wcTest && wcCanCreate ? wcCodeFor(wcWantAlien ? "alien" : "temperate") : null);
-    configureWorld(worldCode);
     const biomeKey = !worldCode && wcTest && wcWantAlien ? "alien" : biomeOf(worldCode);
+    configureWorld(worldCode, biomeKey);
     const BIOME = BIOMES[biomeKey];
 
     const mount = mountRef.current;
@@ -281,6 +319,43 @@ export default function PlanetDemo() {
     const fogTintC = new THREE.Color(BIOME.fogTint);
     const skyMat = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide, fog: false });
     scene.add(new THREE.Mesh(skyGeo, skyMat));
+
+    // ---------- Cielo alieno: pianeta con anelli, due lune e stelle visibili anche di giorno ----------
+    let alienSky = null;
+    if (BIOME.seaGlow) {
+      const g = new THREE.Group();
+      const basic = (c, o = 1) => new THREE.MeshBasicMaterial({ color: c, fog: false, transparent: o < 1, opacity: o, depthWrite: o >= 1 });
+      const giant = new THREE.Mesh(new THREE.SphereGeometry(70, 32, 20), basic("#e7a96b"));
+      const band = new THREE.Mesh(new THREE.SphereGeometry(70.5, 32, 20, 0, Math.PI * 2, Math.PI * 0.42, Math.PI * 0.12), basic("#c9784a"));
+      const ring = new THREE.Mesh(new THREE.RingGeometry(92, 128, 64), new THREE.MeshBasicMaterial({ color: "#f3d6b0", fog: false, side: THREE.DoubleSide, transparent: true, opacity: 0.65, depthWrite: false }));
+      ring.rotation.x = Math.PI / 2 - 0.35;
+      const gp = new THREE.Group(); gp.add(giant, band, ring);
+      gp.position.set(-300, 75, -380); gp.rotation.z = 0.4;
+      const moon1 = new THREE.Mesh(new THREE.SphereGeometry(16, 20, 14), basic("#d9e2ff"));
+      moon1.position.set(360, 55, 160);
+      const moon2 = new THREE.Mesh(new THREE.SphereGeometry(9, 16, 12), basic("#9fe6d0"));
+      moon2.position.set(180, 70, 420);
+      g.add(gp, moon1, moon2);
+      // stelle
+      const sp = [];
+      const sr = mulberry32(99);
+      for (let i = 0; i < 700; i++) {
+        const v = new THREE.Vector3(sr() * 2 - 1, sr() * 2 - 1, sr() * 2 - 1).normalize().multiplyScalar(640);
+        sp.push(v.x, v.y, v.z);
+      }
+      const sg = new THREE.BufferGeometry();
+      sg.setAttribute("position", new THREE.Float32BufferAttribute(sp, 3));
+      const starMat = new THREE.PointsMaterial({ color: "#ffffff", size: 2, sizeAttenuation: false, fog: false, transparent: true, opacity: 0.4, depthWrite: false });
+      g.add(new THREE.Points(sg, starMat));
+      scene.add(g);
+      // il cielo segue il giocatore (come uno sfondo): pianeta e lune restano sempre sopra l'orizzonte
+      const upY = new THREE.Vector3(0, 1, 0);
+      alienSky = { update(dayF) {
+        starMat.opacity = 0.35 + (1 - dayF) * 0.65;
+        g.position.copy(camera.position);
+        g.quaternion.setFromUnitVectors(upY, charDir);
+      } };
+    }
 
     // ---------- Lights ----------
     const hemi = new THREE.HemisphereLight(0xdfe8e6, 0x596356, 0.95);
@@ -327,8 +402,8 @@ export default function PlanetDemo() {
     const grassLightC = grassC.clone().lerp(new THREE.Color("#c9c27a"), 0.5);
     const grassDarkC = grassC.clone().lerp(new THREE.Color("#3f5e46"), 0.45);
     const dirtC = sandC.clone().lerp(new THREE.Color("#8a7458"), 0.55);
-    const pathC = new THREE.Color("#c8b48c");
-    const pathEdgeC = new THREE.Color("#a4916b");
+    const pathC = new THREE.Color(BIOME.pathCore);
+    const pathEdgeC = new THREE.Color(BIOME.pathEdge);
     const colors = new Float32Array(posAttr.count * 3);
     const nrm = new THREE.Vector3();
     // ROADS: sentieri dipinti nel terreno (riempiti dopo aver creato i villaggi); PLAZAS: piazze rotonde
@@ -455,6 +530,9 @@ export default function PlanetDemo() {
     seaGeo.computeVertexNormals();
     const seaUniforms = { uTime: { value: 0 } };
     const seaMat = new THREE.MeshToonMaterial({ vertexColors: true, gradientMap });
+    // cose che di notte si illuminano (mare alieno, alberi alieni, cristalli): intensita' aggiornata col ciclo giorno/notte
+    const nightGlow = []; // { mat, day, night }
+    if (BIOME.seaGlow) { seaMat.emissive = new THREE.Color(BIOME.seaGlow); nightGlow.push({ mat: seaMat, day: 0.25, night: 0.9 }); }
     seaMat.onBeforeCompile = (sh) => {
       sh.uniforms.uTime = seaUniforms.uTime;
       sh.vertexShader = "uniform float uTime;\n" + sh.vertexShader.replace(
@@ -557,6 +635,40 @@ export default function PlanetDemo() {
       }
     }
     const nearVillage = (d) => VILLAGES.some((v) => v.angleTo(d) < 0.5);
+    // ---------- Pianeta alieno: guglie di cristallo al posto delle montagne (brillano di notte) ----------
+    if (BIOME.crystals) {
+      const crystMats = ["#b58cff", "#7fe0ff", "#ff9ad5"].map((c) => {
+        const m = new THREE.MeshToonMaterial({ color: c, gradientMap, emissive: new THREE.Color(c) });
+        nightGlow.push({ mat: m, day: 0.25, night: 0.9 });
+        return m;
+      });
+      const prism = new THREE.CylinderGeometry(0.0, 1, 1, 6, 1); // punta in alto
+      prism.translate(0, 0.5, 0);
+      const crystRand = mulberry32(hashStr((worldCode || "legacy") + "cr"));
+      MOUNTAINS.forEach((mt) => {
+        const n = 6 + Math.floor(crystRand() * 5);
+        for (let i = 0; i < n; i++) {
+          const a = crystRand() * Math.PI * 2, rr = crystRand() * mt.r * 0.35;
+          const t = new THREE.Vector3(Math.cos(a), 0, Math.sin(a));
+          const ref = Math.abs(mt.c.y) < 0.9 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
+          const e1 = new THREE.Vector3().crossVectors(ref, mt.c).normalize();
+          const e2 = new THREE.Vector3().crossVectors(mt.c, e1);
+          const d = mt.c.clone().addScaledVector(e1, t.x * rr).addScaledVector(e2, t.z * rr).normalize();
+          if (terrainHeight(d) < seaSurfaceH(d) + 0.3) continue;
+          const surf = getSurfacePoint(d);
+          const hgt = (i === 0 ? 9 : 3 + crystRand() * 5) * (0.6 + mt.h / 20);
+          const wid = 0.5 + hgt * 0.12;
+          const m = new THREE.Mesh(prism, crystMats[i % 3]);
+          m.scale.set(wid, hgt, wid);
+          m.position.copy(surf.point).addScaledVector(surf.normal, -0.3);
+          m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), d);
+          m.rotateX((crystRand() - 0.5) * 0.5); m.rotateZ((crystRand() - 0.5) * 0.5);
+          m.castShadow = true;
+          scene.add(m);
+          obstacles.push({ dir: d.clone(), r: (wid + 0.3) / PLANET_R });
+        }
+      });
+    }
     const decor = { tree: [], bush: [], rock: [] };
     for (let i = 0; i < 520; i++) {
       const d = randomDir();
@@ -693,6 +805,10 @@ export default function PlanetDemo() {
         });
         const procObjs = decor[kind].map((e) => e.obj);
         procObjs.forEach((o) => (o.visible = false));
+        if (BIOME.seaGlow && kind !== "rock") realMeshes.forEach((m) => {
+          const mats = Array.isArray(m.material) ? m.material : [m.material];
+          mats.forEach((mt) => { if (mt.emissive && !mt.userData.glow) { mt.userData.glow = true; if (mt.map) { mt.emissiveMap = mt.map; mt.emissive.set(0xffffff); } else mt.emissive.copy(mt.color); mt.emissiveIntensity = 0; mt.needsUpdate = true; nightGlow.push({ mat: mt, day: 0, night: 0.75 }); } });
+        });
         if (kind === "bush") { realMeshes.forEach((m) => quality.smallObjs.push(m)); realMeshes.forEach((m) => (m.visible = QUALITY_LEVELS[quality.level].small)); }
         quality.register(procObjs, realMeshes);
       });
@@ -942,8 +1058,8 @@ export default function PlanetDemo() {
 
     // villaggi: un anello di case rivolte verso la piazza, con pozzo, lampioni e stradine
     const wellStone = new THREE.MeshToonMaterial({ color: "#8d8a84", gradientMap });
-    const lampGlow = new THREE.MeshBasicMaterial({ color: "#ffd98a" });
-    const lampPost = new THREE.MeshToonMaterial({ color: "#3b3a3c", gradientMap });
+    const lampGlow = new THREE.MeshBasicMaterial({ color: BIOME.lamp });
+    const lampPost = new THREE.MeshToonMaterial({ color: BIOME.lampPost, gradientMap });
     const groundProps = []; // pozzi e lampioni: da riallineare quando il terreno viene livellato
     function orientUp(obj, surf) {
       groundProps.push(obj);
@@ -960,6 +1076,21 @@ export default function PlanetDemo() {
       orientUp(g, surf); scene.add(g);
       obstacles.push({ dir: dir.clone(), r: 1.5 / PLANET_R });
     }
+    function addDome(dir) {
+      const surf = getSurfacePoint(dir);
+      const g = new THREE.Group();
+      orientUp(g, surf); scene.add(g);
+      loadModelT(BIOME.centerModel).then((gl) => {
+        if (!gl) return;
+        const m = gl.scene.clone();
+        const bb = new THREE.Box3().setFromObject(m);
+        const k = 4.6 / Math.max(0.1, bb.max.x - bb.min.x);
+        m.scale.setScalar(k); m.position.y = -bb.min.y * k - 0.05;
+        m.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+        g.add(m);
+      });
+      obstacles.push({ dir: dir.clone(), r: 2.5 / PLANET_R });
+    }
     function addLamp(dir) {
       const surf = getSurfacePoint(dir);
       const g = new THREE.Group();
@@ -975,7 +1106,7 @@ export default function PlanetDemo() {
       const ta = new THREE.Vector3(1, 0, 0).addScaledVector(vc, -vc.x).normalize();
       const tb = new THREE.Vector3().crossVectors(vc, ta).normalize();
       const ringAt = (angle, dist) => vc.clone().addScaledVector(ta, Math.cos(angle) * dist).addScaledVector(tb, Math.sin(angle) * dist).normalize();
-      addWell(vc);
+      if (BIOME.centerModel) addDome(vc); else addWell(vc);
       for (let i = 0; i < order.length; i++) {
         const angle = (i / order.length) * Math.PI * 2 + 0.3 + vi;
         const hutDir = ringAt(angle, 17 / PLANET_R);
@@ -1086,7 +1217,7 @@ export default function PlanetDemo() {
     // sentieri: nastri che seguono il terreno, con bordi sfumati (niente piu' scalini della griglia)
     {
       const rp = [], rc = [], ri = [];
-      const coreC = new THREE.Color("#c8b48c"), edgeC = new THREE.Color("#a4916b");
+      const coreC = new THREE.Color(BIOME.pathCore), edgeC = new THREE.Color(BIOME.pathEdge);
       const tmpD = new THREE.Vector3(), tan = new THREE.Vector3(), side = new THREE.Vector3();
       const CORE = 0.7, EDGE = 1.25, LIFT = 0.06;
       const put = (d, alpha, c) => {
@@ -1595,8 +1726,8 @@ export default function PlanetDemo() {
     let jumpHeight = 0;
     let jumpVel = 0;
     let grounded = true;
-    const GRAVITY = 16;
-    const JUMP_SPEED = 6;
+    const GRAVITY = BIOME.lowGravity ? 7 : 16; // pianeta alieno: salti piu' alti e lenti
+    const JUMP_SPEED = BIOME.lowGravity ? 5.2 : 6;
     const MOVE_SPEED = 6.5;
 
     function groundRadiusAt(d) {
@@ -2582,7 +2713,8 @@ export default function PlanetDemo() {
     const places = [];
     const mkMat = (c) => new THREE.MeshToonMaterial({ color: c, gradientMap });
     const glowMat = (c) => new THREE.MeshBasicMaterial({ color: c });
-    const stoneM = mkMat("#8a8782"), woodM = mkMat("#7a5636"), waterM = new THREE.MeshBasicMaterial({ color: "#6fc3e8", transparent: true, opacity: 0.8 });
+    const stoneM = mkMat(BIOME.place.stone), woodM = mkMat(BIOME.place.wood), waterM = new THREE.MeshBasicMaterial({ color: BIOME.place.water, transparent: true, opacity: 0.8 });
+    if (BIOME.seaGlow) { stoneM.emissive = new THREE.Color(BIOME.place.stone); nightGlow.push({ mat: stoneM, day: 0.1, night: 0.55 }); }
     const lerpColor = (m, c1, c2, k) => m.color.set(c1).lerp(new THREE.Color(c2), k);
     function newPlace(name, build) {
       const g = new THREE.Group();
@@ -2668,7 +2800,8 @@ export default function PlanetDemo() {
     ];
     {
       const chosen = [];
-      for (const [bi, [name, build]] of BUILDERS.entries()) {
+      for (const [bi, [name0, build]] of BUILDERS.entries()) {
+        const name = BIOME.placeNames ? BIOME.placeNames[bi] : name0;
         for (let attempt = 0; attempt < 2500; attempt++) {
           const d = randomDir();
           const h = terrainHeight(d);
@@ -2710,6 +2843,8 @@ export default function PlanetDemo() {
     // test: mi porto sulla riva del mare i, guardando verso il largo (k = direzione di uscita)
     if (TEST_PARTNER) window.__q = () => ({ level: quality.level, mode: quality.mode, n: quality.frameTimes.length, cd: quality.cooldown, hidden: document.hidden });
     if (TEST_PARTNER) window.__enter = (key) => { const b = buildings.find((x) => x.roomKey === key); if (b) enterBuilding(b); return !!b; };
+    if (TEST_PARTNER) window.__glow = () => nightGlow.map((g) => [g.mat.type, g.mat.color.getHexString(), g.mat.emissive.getHexString(), +g.mat.emissiveIntensity.toFixed(2), !!g.mat.map, !!g.mat.vertexColors]).slice(0, 12);
+    if (TEST_PARTNER) window.__face = (x, y, z) => { const v = new THREE.Vector3(x, y, z).normalize(); facing.copy(v.addScaledVector(charDir, -v.dot(charDir)).normalize()); camPitch = 0.15; snapOutCam = true; };
     if (TEST_PARTNER) window.__pitch = (v) => { camPitch = v; };
     if (TEST_PARTNER) window.__tpSea = (i, k = 0, back = 4) => {
       const c = SEA_CENTERS[i % SEA_CENTERS.length];
@@ -2885,7 +3020,7 @@ export default function PlanetDemo() {
       const DAY_CYCLE_SECONDS = 2400; // un giro completo del sole: 40 minuti
       const sunAngle = SUN_A0 - 0.7 + ((t % DAY_CYCLE_SECONDS) / DAY_CYCLE_SECONDS) * Math.PI * 2;
       sunDirVec.copy(SUN_U).multiplyScalar(Math.cos(sunAngle)).addScaledVector(SUN_V, Math.sin(sunAngle));
-      const sunHeight = alwaysDay ? 1 : charDir.dot(sunDirVec); // 1 = sole allo zenit, -1 = mezzanotte
+      const sunHeight = TEST_PARTNER && window.__sunH !== undefined ? window.__sunH : alwaysDay ? 1 : charDir.dot(sunDirVec); // 1 = sole allo zenit, -1 = mezzanotte
       // transizione molto graduale (camminando non passi da giorno a buio in pochi secondi) e notte chiara
       const dayFactor = smoothstep(-0.7, 0.45, sunHeight);
       const duskFactor = alwaysDay ? 0 : Math.max(0, 1 - Math.abs(sunHeight - 0.05) * 3) * 0.8;
@@ -2895,6 +3030,8 @@ export default function PlanetDemo() {
       hemi.color.set("#98a6d6").lerp(dayColorTmp.set("#dfe8e6"), dayFactor);
       skyMat.color.set("#6f80ae").lerp(dayColorTmp.set("#ffffff"), dayFactor).lerp(duskColorTmp.set("#ffb27a"), duskFactor * 0.45);
       scene.fog.color.copy(skyMat.color).multiply(fogTintC);
+      for (let i = 0; i < nightGlow.length; i++) { const ng = nightGlow[i]; ng.mat.emissiveIntensity = ng.day + (ng.night - ng.day) * (1 - dayFactor); }
+      if (alienSky) alienSky.update(dayFactor, t);
 
       // ---------- Clouds: orbit slowly around their own random axis ----------
       clouds.forEach((c) => {
@@ -3118,7 +3255,7 @@ export default function PlanetDemo() {
       if (moving && grounded && walkAmp > 0.5) {
         if (stepIdx !== stepAcc) {
           stepAcc = stepIdx;
-          audio.step(0.5 + 0.5 * curSpeed);
+          audio.step(0.5 + 0.5 * curSpeed, BIOME.metalSteps);
           puff(blob.position, charDir, 1, 0.4);
         }
       } else stepAcc = stepIdx;

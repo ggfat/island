@@ -147,4 +147,5 @@ La forma del pianeta (mari, montagne, colline, posizione di alberi, villaggi e l
 - Pianeta alieno: 5 personaggi (4 astronauti + l'alieno Zorp, stesso scheletro dei pirati, armi nascoste), alberi/rocce/piante aliene, case spaziali con impronte proprie, cielo rosa-viola e mare viola. Limite 5 giocatori (anche lato relay).
 - Completate le 6 missioni, "Crea un nuovo mondo" crea un pianeta alieno.
 - Per provarlo: `/?biome=alieno` crea direttamente un mondo alieno; `/?test=1&biome=alieno` da solo con il compagno simulato.
-- Limiti: interni delle case ancora di legno; con la grafica ridotta (telefoni lenti) compaiono le sagome procedurali del bioma temperato.
+- Identità propria: crateri al posto delle colline, guglie di cristallo al posto delle montagne, mare viola che si illumina, pianeta con anelli e due lune nel cielo (seguono il giocatore), stelle visibili anche di giorno, alberi e cristalli che brillano di notte, cupole geodetiche al centro dei villaggi, passerelle grigio-azzurre al posto dei sentieri, lampioni azzurri, gravità bassa (salti più alti e lenti), passi metallici, luoghi speciali in cristallo con nomi spaziali.
+- Limiti: gli interni delle case sono ancora quelli di legno; i luoghi speciali cambiano colori e nomi ma non forma.
