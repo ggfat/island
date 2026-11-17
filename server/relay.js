@@ -20,7 +20,7 @@ const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || null;
 
 function freeSlot(room, pref) {
   const used = new Set([...room.players.values()].map((p) => p.c));
-  if (Number.isInteger(pref) && pref >= 0 && pref < 7 && !used.has(pref)) return pref;
+  if (Number.isInteger(pref) && pref >= 0 && pref < Math.min(7, room.cap) && !used.has(pref)) return pref;
   let c = 0;
   while (used.has(c)) c++;
   return c;
@@ -59,9 +59,9 @@ function newCode() {
     if (!rooms.has(c)) return c;
   }
 }
-// stesso calcolo del client: il primo carattere del codice decide il bioma; il pianeta alieno ha 5 personaggi
+// stesso calcolo del client: il primo carattere del codice decide il bioma
 const WORLD_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789";
-const BIOME_CAPS = [7, 5];
+const BIOME_CAPS = [6, 6]; // un giocatore per personaggio: 6 nel mondo temperato, 6 sul pianeta alieno
 function biomeCap(code) {
   const i = WORLD_ALPHABET.indexOf(code[0]);
   return i < 0 || code === "test" ? 99 : BIOME_CAPS[i % BIOME_CAPS.length];

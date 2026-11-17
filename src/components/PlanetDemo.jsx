@@ -138,8 +138,8 @@ const BIOMES = {
     sea: "#4f86a0", seaShallow: "#79bcc6", seaDeep: "#2f6d8c", seaFoam: "#eef7f4", seaGlow: null,
     pathCore: "#c8b48c", pathEdge: "#a4916b", lamp: "#ffd98a", lampPost: "#3b3a3c", lowGravity: false, metalSteps: false, crystals: false, centerModel: null,
     skyTop: "#5f9fc7", skyHorizon: "#dce9e6", fog: "#bcd6d8", fogTint: "#ffffff",
-    chars: ["Anne", "Henry", "Mako", "Captain_Barbarossa", "Skeleton", "Skeleton_Headless", "Sharky"].map((n) => `/models/characters/Characters_${n}.gltf`),
-    charNames: ["Anne", "Henry", "Mako", "Barbarossa", "Scheletro", "Senza testa", "Sharky"],
+    chars: ["Anne", "Henry", "Captain_Barbarossa", "Skeleton", "Skeleton_Headless", "Sharky"].map((n) => `/models/characters/Characters_${n}.gltf`),
+    charNames: ["Anne", "Henry", "Barbarossa", "Scheletro", "Senza testa", "Sharky"],
     trees: ["/models/nature/CommonTree_2.gltf", "/models/nature/Pine_1.gltf"],
     rocks: ["/models/nature/Rock_Medium_1.gltf", "/models/nature/Rock_Medium_3.gltf"],
     bushes: ["/models/nature/Bush_Common.gltf"],
@@ -150,8 +150,9 @@ const BIOMES = {
     sea: "#8a62c4", seaShallow: "#c49be8", seaDeep: "#4a2a86", seaFoam: "#f6e8ff", seaGlow: "#6a2fc0",
     pathCore: "#b7c0d4", pathEdge: "#6f7894", lamp: "#8ff3ff", lampPost: "#9aa3b8", lowGravity: true, metalSteps: true, crystals: true, centerModel: "/models/space/GeodesicDome.gltf",
     skyTop: "#6d4fa0", skyHorizon: "#f3c9dc", fog: "#d8b8d6", fogTint: "#f6dcea",
-    chars: ["Astronaut_FinnTheFrog", "Astronaut_BarbaraTheBee", "Astronaut_FernandoTheFlamingo", "Astronaut_RaeTheRedPanda", "Enemy_Large"].map(SP),
-    charNames: ["Finn", "Barbara", "Fernando", "Rae", "Zorp"],
+    // Mako (lo squalo) e' passato qui: robusto come gli astronauti, e i mondi hanno 6 personaggi ciascuno
+    chars: ["Astronaut_FinnTheFrog", "Astronaut_BarbaraTheBee", "Astronaut_FernandoTheFlamingo", "Astronaut_RaeTheRedPanda", "Enemy_Large"].map(SP).concat(["/models/characters/Characters_Mako.gltf"]),
+    charNames: ["Finn", "Barbara", "Fernando", "Rae", "Zorp", "Mako"],
     trees: ["Tree_Blob_1", "Tree_Spikes_1", "Tree_Lava_1", "Tree_Floating_1", "Tree_Swirl_1", "Tree_Light_1"].map(SP),
     rocks: ["Rock_1", "Rock_2", "Rock_3"].map(SP),
     bushes: ["Bush_2", "Plant_1", "Plant_2"].map(SP),
@@ -1444,7 +1445,9 @@ export default function PlanetDemo() {
             g.scene.updateMatrixWorld(true);
             const bb = new THREE.Box3().setFromObject(g.scene, true);
             const h = Math.max(0.5, bb.max.y - bb.min.y);
-            g.userData.fit = { sc: 1.7 / h, y: -bb.min.y * (1.7 / h) };
+            // alcuni personaggi sono molto massicci: un po' piu' bassi per non sembrare giganti
+            const H = 1.7 * (/Mako/.test(pth) ? 0.86 : 1);
+            g.userData.fit = { sc: H / h, y: -bb.min.y * (H / h) };
           }
           return g;
         }));

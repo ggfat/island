@@ -120,7 +120,7 @@ Per provarli da solo: apri il gioco con `?test=1` (simula un secondo giocatore).
 ## Mondi (stanze) e missioni
 
 - Non esiste una stanza "main": chi entra per primo crea il proprio mondo (codice casuale di 8 caratteri) e invita gli altri col link `?room=CODICE`.
-- Massimo 7 giocatori per mondo (uno per personaggio; `ROOM_CAP`, tetto assoluto 7). Il personaggio si sceglie nella schermata iniziale; se è già in uso il server ne assegna uno libero.
+- Massimo 6 giocatori per mondo (uno per personaggio; `ROOM_CAP` può solo abbassarlo). Il personaggio si sceglie nella schermata iniziale; se è già in uso il server ne assegna uno libero.
 - Un ospite può creare il proprio mondo solo dopo aver completato tutte le 6 missioni (menu ☰ → 🌍 Crea un nuovo mondo).
 - Missione = attivare un luogo speciale (servono 2 giocatori). Un luogo attivato resta attivo per sempre nel mondo e compare "Missione completata".
 - Stanza di sviluppo: `npm run relay:dev` e apri `?room=test` (disabilitata in produzione, o con `ALLOW_TEST_ROOM=1`).
@@ -129,7 +129,7 @@ Per provarli da solo: apri il gioco con `?test=1` (simula un secondo giocatore).
 
 ## Personaggi
 
-Ogni giocatore del mondo ha un personaggio diverso (Anne, Henry, Mako, Capitan Barbarossa, Scheletro, Scheletro senza testa, Sharky), assegnato dal server con lo slot libero più basso. Oltre i 7 giocatori i modelli si ripetono con una tinta diversa.
+Ogni giocatore del mondo ha un personaggio diverso. Mondo temperato: Anne, Henry, Capitan Barbarossa, Scheletro, Scheletro senza testa, Sharky. Pianeta alieno: Finn, Barbara, Fernando, Rae, Zorp e Mako (lo squalo, un po' più basso degli altri).
 
 Il relay espone anche `GET /room/CODICE` (stessa porta, CORS aperto o `ALLOWED_ORIGIN`): restituisce `{exists, n, cap, taken:[slot]}`. La schermata iniziale lo interroga ogni 3 s e sbarra i personaggi già occupati.
 
@@ -144,7 +144,7 @@ La forma del pianeta (mari, montagne, colline, posizione di alberi, villaggi e l
 ## Biomi (branch `bioma-alieno`)
 
 - Il primo carattere del codice del mondo decide il bioma: temperato (pirati, case di legno) o pianeta alieno (Ultimate Space Kit di Quaternius, CC0, in `public/models/space/`).
-- Pianeta alieno: 5 personaggi (4 astronauti + l'alieno Zorp, stesso scheletro dei pirati, armi nascoste), alberi/rocce/piante aliene, case spaziali con impronte proprie, cielo rosa-viola e mare viola. Limite 5 giocatori (anche lato relay).
+- Pianeta alieno: 6 personaggi (4 astronauti, l'alieno Zorp e Mako; stesso scheletro dei pirati, armi nascoste), alberi/rocce/piante aliene, case spaziali con impronte proprie, cielo rosa-viola e mare viola. Limite 6 giocatori (anche lato relay).
 - Completate le 6 missioni, "Crea un nuovo mondo" crea un pianeta alieno.
 - Per provarlo: `/?biome=alieno` crea direttamente un mondo alieno; `/?test=1&biome=alieno` da solo con il compagno simulato.
 - Identità propria: crateri al posto delle colline, guglie di cristallo al posto delle montagne, mare viola che si illumina, pianeta con anelli e due lune nel cielo (seguono il giocatore), stelle visibili anche di giorno, alberi e cristalli che brillano di notte, cupole geodetiche al centro dei villaggi, passerelle grigio-azzurre al posto dei sentieri, lampioni azzurri, gravità bassa (salti più alti e lenti), passi metallici, luoghi speciali in cristallo con nomi spaziali.
