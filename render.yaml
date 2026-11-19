@@ -1,0 +1,15 @@
+# Blueprint di Render: un solo servizio che costruisce il client (Vite) e lo serve insieme al relay multiplayer.
+# Ogni push sul branch collegato rifa' build e deploy da solo.
+services:
+  - type: web
+    name: island
+    runtime: node
+    plan: free
+    buildCommand: npm install --include=dev && npm run build
+    startCommand: npm run relay
+    healthCheckPath: /health
+    autoDeployTrigger: commit
+    # Per attivare anche online la stanza "test" (fino a 50 giocatori), togli il commento:
+    # envVars:
+    #   - key: ALLOW_TEST_ROOM
+    #     value: "1"
