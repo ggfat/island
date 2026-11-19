@@ -6,6 +6,9 @@
 import { createServer } from "node:http";
 import { WebSocketServer } from "ws";
 import { randomBytes } from "node:crypto";
+import { createReadStream, existsSync, statSync } from "node:fs";
+import { extname, join, normalize, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const PORT = Number(process.env.PORT) || 8787;
 const DEV = process.argv.includes("--dev") || process.env.ALLOW_TEST_ROOM === "1";
@@ -28,11 +31,45 @@ function freeSlot(room, pref) {
 const rooms = new Map(); // codice -> { code, players, hostToken, cap, places:Set, nextTint, emptySince }
 let nextId = 1;
 
+// Se esiste la cartella dist/ (dopo "npm run build") il relay serve anche il client: un solo servizio, un solo URL.
+const DIST = fileURLToPath(new URL("../dist/", import.meta.url));
+const SERVE_DIST = existsSync(join(DIST, "index.html"));
+const MIME = {
+  ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8",
+  ".json": "application/json", ".txt": "text/plain; charset=utf-8", ".svg": "image/svg+xml", ".ico": "image/x-icon",
+  ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp",
+  ".glb": "model/gltf-binary", ".gltf": "model/gltf+json", ".bin": "application/octet-stream",
+  ".mp3": "audio/mpeg", ".ogg": "audio/ogg", ".wav": "audio/wav", ".woff2": "font/woff2",
+};
+function serveStatic(req, res) {
+  let p;
+  try { p = decodeURIComponent((req.url || "/").split("?")[0]); } catch { res.writeHead(400); return res.end(); }
+  if (p.endsWith("/")) p += "index.html";
+  let file = normalize(join(DIST, p));
+  if (!file.startsWith(DIST)) { res.writeHead(403); return res.end(); } // niente uscite da dist/
+  if (!existsSync(file) || !statSync(file).isFile()) {
+    if (extname(p)) { res.writeHead(404, { "Content-Type": "text/plain" }); return res.end("not found"); }
+    file = join(DIST, "index.html"); // percorsi senza estensione -> la pagina del gioco
+  }
+  const hashed = file.startsWith(join(DIST, "assets") + sep); // i file di Vite hanno l'hash nel nome: cache lunga
+  res.writeHead(200, {
+    "Content-Type": MIME[extname(file).toLowerCase()] || "application/octet-stream",
+    "Cache-Control": hashed ? "public, max-age=31536000, immutable" : "public, max-age=3600",
+  });
+  if (req.method === "HEAD") return res.end();
+  createReadStream(file).on("error", () => res.destroy()).pipe(res);
+}
+
 // piccola API HTTP: GET /room/CODICE -> quali personaggi sono gia' occupati (serve alla schermata di scelta)
 const httpServer = createServer((req, res) => {
+  // /health: risposta minima, usata dal keep-alive e dall'health check di Render
+  if ((req.url || "").split("?")[0] === "/health") { res.writeHead(200, { "Content-Type": "text/plain", "Cache-Control": "no-store" }); return res.end("ok"); }
   const cors = { "Access-Control-Allow-Origin": ALLOWED_ORIGIN || "*", "Content-Type": "application/json", "Cache-Control": "no-store" };
   const m = /^\/room\/([a-z0-9]{1,12})$/i.exec((req.url || "").split("?")[0]);
-  if (!m) { res.writeHead(404, cors); return res.end("{}"); }
+  if (!m) {
+    if (SERVE_DIST && (req.method === "GET" || req.method === "HEAD")) return serveStatic(req, res);
+    res.writeHead(404, cors); return res.end("{}");
+  }
   const room = rooms.get(m[1].toLowerCase());
   if (!room) { res.writeHead(200, cors); return res.end(JSON.stringify({ exists: false, taken: [] })); }
   res.writeHead(200, cors);
@@ -155,5 +192,16 @@ setInterval(() => {
     room.players.forEach((p) => send(p.ws, { t: "state", n: room.players.size, cap: room.cap, pl, p: list.filter((q) => q.id !== p.id) }));
   });
 }, TICK_MS);
+
+// Keep-alive per il piano gratuito di Render, che spegne il servizio dopo 15 minuti senza traffico in ingresso.
+// L'URL pubblico lo danno le variabili di Render: in locale non esistono e il ping non parte. KEEP_ALIVE=0 lo disattiva.
+const SELF_URL = process.env.RENDER_EXTERNAL_URL || (process.env.RENDER_EXTERNAL_HOSTNAME && `https://${process.env.RENDER_EXTERNAL_HOSTNAME}`);
+if (SELF_URL && process.env.KEEP_ALIVE !== "0") {
+  setInterval(() => {
+    fetch(SELF_URL.replace(/\/$/, "") + "/health")
+      .then((r) => process.env.DEBUG && console.log("keep-alive", r.status))
+      .catch(() => {});
+  }, Number(process.env.KEEP_ALIVE_MS) || 10 * 60 * 1000);
+}
 
 console.log(`Relay su ws://0.0.0.0:${PORT} · max ${ROOM_CAP} giocatori per mondo · stanza test: ${DEV ? "ATTIVA" : "spenta"}`);

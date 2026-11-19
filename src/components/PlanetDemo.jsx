@@ -2455,7 +2455,7 @@ export default function PlanetDemo() {
 
     // ---------- Multiplayer (relay) ----------
     const remotes = new Map(); // id -> { root, mixer, actions, curDir, tgtDir, facing, jump, moving, inside, bubble, waveUntil }
-    const relayUrl = (import.meta.env && import.meta.env.VITE_RELAY_URL) || `${location.protocol === "https:" ? "wss" : "ws"}://${location.hostname}:8787`;
+    const relayUrl = (import.meta.env && import.meta.env.VITE_RELAY_URL) || (location.protocol === "https:" ? `wss://${location.host}` : `ws://${location.hostname}:8787`);
     let myNetId = null;
     let playersOnline = 1;
     const netLabel = document.createElement("div");
