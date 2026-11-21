@@ -125,9 +125,9 @@ function mulberry32(a) {
   };
 }
 // ---------- Livelli: ogni livello e' un bioma. Si passa al successivo completando le missioni del corrente ----------
-const BIOME_LIST = ["temperate", "alien"]; // ordine dei livelli
-const BIOME_SLUG = { temperate: "temperato", alien: "alieno" }; // nome del bioma nel link (?bioma=)
-const BIOME_TITLE = { temperate: "Isola temperata", alien: "Pianeta alieno" };
+const BIOME_LIST = ["temperate", "alien", "city"]; // ordine dei livelli
+const BIOME_SLUG = { temperate: "temperato", alien: "alieno", city: "citta" }; // nome del bioma nel link (?bioma=)
+const BIOME_TITLE = { temperate: "Isola temperata", alien: "Pianeta alieno", city: "Citta' abbandonata" };
 function slugToBiome(v) {
   if (!v) return null;
   v = String(v).toLowerCase();
@@ -144,6 +144,11 @@ const QUEST_ITEMS = {
     { id: "kit", name: "Kit di riparazione", path: "/models/scifi/Prop_HealthPack.gltf" },
     { id: "cristallo", name: "Cristallo di energia", path: "/models/space/rock_crystals.glb" },
     { id: "batteria", name: "Batteria", path: "/models/scifi/machine_barrel.glb" },
+  ],
+  city: [
+    { id: "attrezzi", name: "Cassetta degli attrezzi", path: "/models/city/Chest.gltf" },
+    { id: "ruota", name: "Ruota di scorta", path: "/models/city/Wheel.gltf" },
+    { id: "chitarra", name: "Chitarra", path: "/models/city/Guitar.gltf" },
   ],
 };
 const PLACES_PER_LEVEL = 6;
@@ -202,6 +207,27 @@ const BIOMES = {
       { name: "ship", x0: -2.0, x1: 2.0, z0: -1.81, z1: 1.81, h: 4.3, roofH: 1.2, roomKey: "medium" },
     ],
   },
+};
+BIOMES.city = {
+  // citta' abbandonata: erba secca, asfalto, cielo velato color polvere, acqua torbida
+  palette: { sand: "#b7aa8f", grass: "#7b7d5e", rock: "#7f7b77", snow: "#d9d6cf", trunk: "#4d4239", foliage: "#5f6649" },
+  sea: "#4f6e6a", seaShallow: "#7f9a8e", seaDeep: "#33504f", seaFoam: "#dfe3d6", seaGlow: null,
+  pathCore: "#5d6064", pathEdge: "#82847f", lamp: "#ffcf7a", lampPost: "#2f3133", lowGravity: false, metalSteps: false, crystals: false,
+  centerModel: "/models/city/WaterTower.gltf",
+  skyTop: "#8f9ea3", skyHorizon: "#e6cfa8", fog: "#cdbfa4", fogTint: "#f3e6d2",
+  chars: ["Characters_Lis_SingleWeapon", "Characters_Matt_SingleWeapon", "Characters_Sam_SingleWeapon", "Characters_Shaun_SingleWeapon", "Zombie_Basic", "Zombie_Chubby"].map((n) => `/models/city/${n}.gltf`),
+  charNames: ["Lis", "Matt", "Sam", "Shaun", "Zombie", "Zombie grosso"],
+  trees: ["DeadTree_1", "DeadTree_2", "DeadTree_3", "TwistedTree_2"].map((n) => `/models/city/${n}.gltf`),
+  rocks: ["CinderBlock", "TrashBag_1", "Wheels_Stack", "Pallet_Broken"].map((n) => `/models/city/${n}.gltf`),
+  bushes: ["TrafficCone_1", "TrashBag_2", "Grass_Wispy_Tall", "FireHydrant"].map((n) => `/models/city/${n}.gltf`),
+  decorH: { tree: 6.5, rock: 0.7, bush: 0.8 },
+  // palazzi del Downtown City MegaKit (porta sul lato +Z), rimpiccioliti a misura di villaggio
+  houses: [{ path: "/models/city/Building_Large_2.gltf", rotY: 0 }, { path: "/models/city/Building_Small_1.gltf", rotY: 0 }, { path: "/models/city/Building_Medium_2_001.gltf", rotY: 0 }],
+  buildingTypes: [
+    { name: "long", x0: -3.1, x1: 3.1, z0: -2.6, z1: 2.4, h: 8.4, roofH: 0.4, roomKey: "large" },
+    { name: "tower", x0: -2.35, x1: 2.35, z0: -2.8, z1: 2.7, h: 6.5, roofH: 0.4, roomKey: "small" },
+    { name: "ship", x0: -2.5, x1: 2.5, z0: -2.2, z1: 2.1, h: 8.3, roofH: 0.4, roomKey: "medium" },
+  ],
 };
 // altezze di riferimento dei nostri modelli: i modelli di altri biomi vengono portati alla stessa misura
 const DECOR_TARGET_H = { tree: 7.5, rock: 2.3, bush: 1.6 };
@@ -852,7 +878,7 @@ export default function PlanetDemo() {
     }
     function swapInReal(kind, paths) {
       Promise.all(paths.map((pth) => loadModelT(pth))).then((models) => {
-        const variants = models.filter(Boolean).map((g) => (biomeKey === "temperate" ? g : normalizeHeight(g, DECOR_TARGET_H[kind])));
+        const variants = models.filter(Boolean).map((g) => (biomeKey === "temperate" ? g : normalizeHeight(g, (BIOME.decorH || DECOR_TARGET_H)[kind])));
         if (variants.length === 0 || decor[kind].length === 0) return;
         const realMeshes = [];
         variants.forEach((gltf, vIdx) => {
@@ -1505,7 +1531,7 @@ export default function PlanetDemo() {
             const bb = new THREE.Box3().setFromObject(g.scene, true);
             const h = Math.max(0.5, bb.max.y - bb.min.y);
             // alcuni personaggi sono molto massicci: un po' piu' bassi per non sembrare giganti
-            const H = 1.7 * (/Mako/.test(pth) ? 0.86 : 1);
+            const H = 1.7 * (/Mako/.test(pth) ? 0.86 : /Zombie_Chubby/.test(pth) ? 0.9 : 1);
             g.userData.fit = { sc: H / h, y: -bb.min.y * (H / h) };
           }
           return g;
@@ -1523,7 +1549,7 @@ export default function PlanetDemo() {
       model.position.y = forClone ? f.y : f.y / 1.15;
       if (forClone || extraTint(i) > 0) applyPlayerTint(model, PLAYER_TINTS[extraTint(i) % PLAYER_TINTS.length], gradientMap);
       model.traverse((o) => {
-        if (/pistol|gun|weapon|rifle/i.test(o.name)) o.visible = false; // gli astronauti hanno un'arma: il gioco e' pacifico
+        if (/pistol|gun|weapon|rifle|smg|knife|bat_saw|bat_barbed|shotgun/i.test(o.name)) o.visible = false; // niente armi: il gioco e' pacifico
         if (o.isMesh) { o.castShadow = true; o.frustumCulled = false; }
       });
       return model;
@@ -1625,6 +1651,8 @@ export default function PlanetDemo() {
     const rIron = new THREE.MeshToonMaterial({ color: "#4a4a50", gradientMap });
     // misure [larghezza x, profondita' z] dei mobili, per le collisioni
     const PROP_SIZE = {
+      "city/Couch.gltf": [3.01, 1.21], "city/Barrel.gltf": [0.7, 0.7], "city/Wheels_Stack.gltf": [0.66, 0.57], "city/TrashBag_1.gltf": [0.5, 0.5], "city/TrashBag_2.gltf": [0.5, 0.5],
+      "scifi/Prop_Desk_Small.gltf": [1.6, 0.9],
       "scifi/Prop_Desk_Medium.gltf": [2.84, 1.03], "scifi/Prop_Desk_L.gltf": [2.22, 2.22], "scifi/Prop_Chair.gltf": [0.88, 1.12], "scifi/Prop_Crate_Large.gltf": [3.47, 1.5],
       "scifi/Prop_Crate.gltf": [1.57, 1.5], "scifi/Prop_Crate_Tarp.gltf": [1.72, 1.71], "scifi/Prop_Barrel1.gltf": [0.72, 0.65], "scifi/Prop_Barrel2_Closed.gltf": [0.54, 0.54],
       "scifi/Prop_Locker.gltf": [0.98, 0.5], "scifi/Prop_Shelves_WideTall.gltf": [1.98, 0.54], "scifi/Prop_Shelves_ThinShort.gltf": [1.37, 0.54], "scifi/Prop_Chest.gltf": [1.84, 1.37],
@@ -1654,6 +1682,8 @@ export default function PlanetDemo() {
       return propCache.get(name);
     }
     const ALIEN_IN = biomeKey === "alien";
+    const CITY_IN = biomeKey === "city";
+    const TECH_IN = ALIEN_IN || CITY_IN; // porta metallica invece che di legno
     const ALIEN_THEMES = {
       large: { wall: "#cfd6e2", floor: "#4a5262", win: "#7fe0ff" },
       small: { wall: "#d9d3e6", floor: "#3f4658", win: "#b58cff" },
@@ -1663,8 +1693,13 @@ export default function PlanetDemo() {
     const aDark = new THREE.MeshToonMaterial({ color: "#2b3140", gradientMap });
     const aSpace = new THREE.MeshBasicMaterial({ color: "#1b1640" });
     if (ALIEN_IN) roomLight.color.set("#dfeaff");
+    const CITY_THEMES = {
+      large: { wall: "#a98a78", floor: "#5f5a56", win: "#ffd9a0" },
+      small: { wall: "#9c9583", floor: "#5a554f", win: "#ffd9a0" },
+      medium: { wall: "#8f9a92", floor: "#54524f", win: "#ffd9a0" },
+    };
     Object.entries(ROOM_SPECS).forEach(([key, { W, D, H }]) => {
-      const th = (ALIEN_IN ? ALIEN_THEMES : THEMES)[key];
+      const th = (ALIEN_IN ? ALIEN_THEMES : CITY_IN ? CITY_THEMES : THEMES)[key];
       const wallM = new THREE.MeshToonMaterial({ color: th.wall, gradientMap });
       const floorM = new THREE.MeshToonMaterial({ color: th.floor, gradientMap });
       const winM = new THREE.MeshBasicMaterial({ color: th.win });
@@ -1686,7 +1721,13 @@ export default function PlanetDemo() {
       box(W + 0.4, H, 0.2, wallM, 0, H / 2, -D / 2 - 0.1);
       box(0.2, H, D + 0.4, wallM, -W / 2 - 0.1, H / 2, 0);
       box(0.2, H, D + 0.4, wallM, W / 2 + 0.1, H / 2, 0);
-      if (ALIEN_IN) {
+      if (CITY_IN) {
+        // porta di metallo scrostata, battiscopa scuro, finestre sbarrate con assi
+        box(1.3, DOOR_H + 0.12, 0.12, aDark, 0, (DOOR_H + 0.12) / 2, -D / 2 + 0.02);
+        box(1.0, DOOR_H, 0.14, aMetal, 0, DOOR_H / 2, -D / 2 + 0.05);
+        box(W + 0.4, 0.14, 0.2, aDark, 0, 0.07, -D / 2 + 0.02);
+        [-1, 1].forEach((sd) => { box(0.06, 1.0, 1.4, winM, sd * (W / 2 - 0.02), H * 0.6, 0.4); [-0.25, 0.2].forEach((dy) => box(0.08, 0.14, 1.6, aDark, sd * (W / 2 - 0.05), H * 0.6 + dy, 0.4).rotation.x = dy * 0.6); });
+      } else if (ALIEN_IN) {
         // portellone metallico con bordo luminoso e fasce di luce lungo le pareti
         box(1.4, DOOR_H + 0.16, 0.12, winM, 0, (DOOR_H + 0.16) / 2, -D / 2 + 0.02);
         box(1.2, DOOR_H, 0.14, aDark, 0, DOOR_H / 2, -D / 2 + 0.05);
@@ -1742,7 +1783,35 @@ export default function PlanetDemo() {
         const glass = new THREE.Mesh(new THREE.CircleGeometry(0.47, 24), aSpace); glass.position.z = -0.01; o.add(glass);
         for (let i = 0; i < 7; i++) { const st = new THREE.Mesh(new THREE.CircleGeometry(0.025, 5), winM); st.position.set((Math.random() - 0.5) * 0.7, (Math.random() - 0.5) * 0.7, 0); if (st.position.length() < 0.42) o.add(st); }
       };
-      if (ALIEN_IN && key === "large") {
+      if (CITY_IN && key === "large") {
+        // RIFUGIO: divano, tavoli recuperati, scaffali di provviste, fusto con il fuoco
+        P("city/Couch.gltf", -2.6, 1.9, 0);
+        P("scifi/Prop_Desk_Medium.gltf", 1.2, 1.6, 0);
+        P("scifi/Prop_Chair.gltf", 0.5, 2.55, Math.PI); P("scifi/Prop_Chair.gltf", 1.9, 2.55, Math.PI);
+        P("scifi/Prop_Shelves_WideTall.gltf", -2.4, -D / 2 + 0.3, 0);
+        P("scifi/Prop_Locker.gltf", 2.2, -D / 2 + 0.3, 0); P("scifi/Prop_Locker.gltf", 3.2, -D / 2 + 0.3, 0);
+        P("city/Barrel.gltf", W / 2 - 0.6, 0.3, 0); P("city/Barrel.gltf", W / 2 - 0.6, -0.6, 1);
+        P("city/Pallet.gltf", -W / 2 + 0.8, -0.6, 0.3, 0, false); P("city/TrashBag_1.gltf", -W / 2 + 0.6, 0.5, 0);
+        P("city/Wheels_Stack.gltf", W / 2 - 0.6, D / 2 - 0.6, 0);
+        P("scifi/Prop_Crate.gltf", -W / 2 + 1.0, -1.1, 0.2);
+      } else if (CITY_IN && key === "small") {
+        // APPARTAMENTO: divano, scrivania, armadietto, scaffale, sacchi
+        P("city/Couch.gltf", 0.9, D / 2 - 0.7, Math.PI);
+        P("scifi/Prop_Desk_Small.gltf", -W / 2 + 0.7, 0.9, R);
+        P("scifi/Prop_Chair.gltf", -W / 2 + 1.5, 0.9, -R);
+        P("scifi/Prop_Shelves_ThinShort.gltf", -1.3, -D / 2 + 0.3, 0);
+        P("scifi/Prop_Locker.gltf", W / 2 - 0.3, -1.0, -R);
+        P("city/TrashBag_2.gltf", W / 2 - 0.5, 0.4, 0); P("city/Barrel.gltf", 1.4, -D / 2 + 0.5, 0);
+      } else if (CITY_IN) {
+        // OFFICINA: banco da lavoro, ruote, fusti, tubi, casse
+        P("scifi/Prop_Desk_Medium.gltf", -W / 2 + 0.6, 0.6, R);
+        P("scifi/Prop_Chair.gltf", -W / 2 + 1.6, 0.6, -R);
+        P("city/Wheels_Stack.gltf", W / 2 - 0.6, -1.6, 0); P("city/Wheels_Stack.gltf", W / 2 - 1.3, -1.9, 0.6);
+        P("city/Barrel.gltf", W / 2 - 0.5, D / 2 - 0.6, 0); P("city/Barrel.gltf", W / 2 - 1.3, D / 2 - 0.6, 1);
+        P("city/Pipes.gltf", 0.05, D / 2 - 0.5, R, 0, false);
+        P("scifi/Prop_Crate.gltf", -W / 2 + 1.0, D / 2 - 0.9, 0.2);
+        P("scifi/Prop_Locker.gltf", 1.6, -D / 2 + 0.3, 0);
+      } else if (ALIEN_IN && key === "large") {
         // MENSA DELLA BASE: tavoli con sedie, casse, armadietti, generatore
         porthole(-W / 2 + 0.02, H * 0.58, -1.2, R); porthole(-W / 2 + 0.02, H * 0.58, 1.4, R); porthole(W / 2 - 0.02, H * 0.58, 0.2, -R);
         [[-2.15, 1.3], [-2.15, -1.2]].forEach(([tx, tz]) => {

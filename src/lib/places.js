@@ -245,5 +245,68 @@ export function makePlaceBuilders({ THREE, loadToon, biome }) {
       };
     }],
   ];
-  return biome === "alien" ? alien : temperate;
+  const CT = "/models/city/";
+  const city = [
+    ["Barricata", (g) => {
+      // muro di barriere e coni: quando si attiva, i lampeggianti arancioni si accendono
+      [[-1.4, -0.8, 0.2], [0, -1.1, 0], [1.4, -0.8, -0.2]].forEach(([x, z, r]) => M(g, CT + "TrafficBarrier_1.gltf", x, z, r));
+      M(g, CT + "PlasticBarrier.gltf", -2.3, 0.3, 1.2); M(g, CT + "PlasticBarrier.gltf", 2.3, 0.3, -1.2);
+      [[-1.8, 1.2], [-0.6, 1.5], [0.7, 1.4], [1.9, 1.1]].forEach(([x, z], i) => M(g, CT + "TrafficCone_" + (1 + (i % 2)) + ".gltf", x, z, i));
+      M(g, CT + "CinderBlock.gltf", 0.2, 0.5, 0.4); M(g, CT + "CinderBlock.gltf", 0.5, 0.6, 1.1);
+      const lights = [-1.4, 0, 1.4].map((x, i) => lightBall(g, "#ffa23c", 0.1, x, 1.25, [-0.8, -1.1, -0.8][i]));
+      return (act, t) => lights.forEach((l, i) => l.set(act * (Math.sin(t * 6 + i * 2) > 0 ? 1 : 0.15)));
+    }],
+    ["Officina", (g) => {
+      // il pick-up viene blindato: al posto di quello normale compare la versione corazzata
+      const plain = M(g, CT + "Vehicle_Pickup.gltf", 0, 0, 0.5);
+      const armored = M(g, CT + "Vehicle_Pickup_Armored.gltf", 0, 0, 0.5); armored.visible = false;
+      M(g, CT + "Wheels_Stack.gltf", -2.3, -1.2, 0); M(g, CT + "Wheel.gltf", -2.4, 0.2, 0, 1, 0.1);
+      M(g, CT + "Barrel.gltf", 2.4, -1.0, 0); M(g, CT + "Pipes.gltf", 2.3, 1.0, 1.2);
+      const sparks = rising(g, 14, "#ffd27a", 0.04, { r: 0.4, x: 1.2, z: 0.6, y: 0.6 }, 1.2, 1.3);
+      return (act, t) => { const on = act > 0.5; plain.visible = !on; armored.visible = on; sparks(act, t); };
+    }],
+    ["Rifornimenti", (g) => {
+      M(g, CT + "Container_Red.gltf", 0, -2.3, 0, 0.45);
+      M(g, CT + "Pallet.gltf", -1.6, 0.8, 0.3); M(g, CT + "Pallet.gltf", 1.5, 0.9, -0.2);
+      const closed = M(g, CT + "Chest.gltf", -1.6, 0.8, 0.3, 1.3, 0.14);
+      const open = M(g, CT + "Chest_Special.gltf", 1.5, 0.9, -0.2, 1.3, 0.14); open.visible = false;
+      M(g, CT + "Barrel.gltf", 2.5, -0.4, 0); M(g, CT + "TrashBag_1.gltf", -2.5, -0.3, 0);
+      const shine = lightBall(g, "#fff1a8", 0.16, 1.5, 0.9, 0.9);
+      void closed;
+      return (act, t) => { open.visible = act > 0.5; shine.set(act * (0.8 + 0.2 * Math.sin(t * 4))); };
+    }],
+    ["Incrocio", (g) => {
+      // incrocio con semafori: attivandolo tornano a funzionare (rosso, giallo, verde)
+      M(g, CT + "Street_4Way.gltf", 0, 0, 0, 1, 0, 6);
+      M(g, CT + "TrafficLight_1.gltf", -2.2, -2.2, 0.8); M(g, CT + "TrafficLight_2.gltf", 2.2, 2.2, -2.3);
+      const lamps = [[-2.0, -2.0], [2.0, 2.0]].map(([x, z]) => ["#ff4b3a", "#ffc93a", "#5cff7a"].map((c, k) => lightBall(g, c, 0.11, x, 3.3 - k * 0.3, z)));
+      M(g, CT + "Vehicle_Sports.gltf", 0.8, -0.6, 1.2, 0.8);
+      return (act, t) => {
+        const phase = Math.floor(t / 1.5) % 3;
+        lamps.forEach((set, i) => set.forEach((l, k) => l.set(act * (k === (phase + i) % 3 ? 1 : 0.08))));
+      };
+    }],
+    ["Falo' dei sopravvissuti", (g) => {
+      // divano e chitarra attorno al fusto: quando si attiva si accende il fuoco e salgono le note
+      M(g, CT + "Couch.gltf", 0, -1.8, 0, 0.85);
+      M(g, CT + "Barrel.gltf", 0, 0, 0);
+      M(g, CT + "Guitar.gltf", 1.2, -1.3, 0.9, 1, 0.45);
+      M(g, CT + "Pallet_Broken.gltf", -1.6, 0.7, 0.6); M(g, CT + "Pallet.gltf", 1.7, 0.8, -0.4);
+      M(g, CT + "TrashBag_2.gltf", -2.3, -0.6, 0);
+      const fire = lightBall(g, "#ff8a2a", 0.22, 0, 1.3, 0);
+      const embers = rising(g, 14, "#ffb347", 0.05, { r: 0.25, y: 1.2 }, 1.6, 0.9);
+      const notes = rising(g, 6, "#fff4c2", 0.07, { r: 0.4, x: 1.2, z: -1.3, y: 0.8 }, 1.8, 0.35);
+      return (act, t) => { fire.set(act * (0.85 + 0.15 * Math.sin(t * 13))); embers(act, t); notes(act, t); };
+    }],
+    ["Camion di fuga", (g) => {
+      // il camion per scappare dalla citta': attivandolo diventa blindato e accende i fari
+      const truck = M(g, CT + "Vehicle_Truck.gltf", 0, 0, 0.3);
+      const armored = M(g, CT + "Vehicle_Truck_Armored.gltf", 0, 0, 0.3); armored.visible = false;
+      M(g, CT + "Barrel.gltf", 2.3, -1.2, 0); M(g, CT + "Barrel.gltf", 2.6, -0.4, 1);
+      M(g, CT + "Wheels_Stack.gltf", -2.4, -1.0, 0);
+      const heads = [-0.7, 0.7].map((x) => lightBall(g, "#fff6d0", 0.12, x * Math.cos(0.3) + 2.5 * Math.sin(0.3), 1.0, 2.5 * Math.cos(0.3) - x * Math.sin(0.3)));
+      return (act, t) => { const on = act > 0.5; truck.visible = !on; armored.visible = on; heads.forEach((h) => h.set(act)); };
+    }],
+  ];
+  return biome === "alien" ? alien : biome === "city" ? city : temperate;
 }
