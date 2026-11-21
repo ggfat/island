@@ -153,7 +153,7 @@ La forma del pianeta (mari, montagne, colline, posizione di alberi, villaggi e l
 
 ## Livelli e missioni (aggiornato)
 
-- Tre livelli, ognuno un bioma: 1 Isola temperata, 2 Pianeta alieno, 3 Citta' abbandonata (Zombie Apocalypse Kit + Downtown City MegaKit di Quaternius, CC0, in `public/models/city/`).
+- Tre livelli, ognuno un bioma: 1 Isola temperata (mare), 2 Pianeta alieno (lago di lava con bolle), 3 Citta' abbandonata (griglia di strade su tutto il pianeta, senza mare) (Zombie Apocalypse Kit + Downtown City MegaKit di Quaternius, CC0, in `public/models/city/`).
 - Missioni per livello: 6 luoghi speciali da attivare in coppia + 3 oggetti da trovare dentro le case (le case con un oggetto hanno scintille dorate sopra il tetto). Completate tutte, si sblocca il livello successivo.
 - "Crea un nuovo mondo" crea sempre un mondo del proprio livello piu' alto. Gli invitati entrano nel mondo di chi invita, di qualunque livello.
 - Il bioma viaggia nel link: `?room=CODICE&bioma=temperato|alieno|citta`. Il codice decide solo la forma del pianeta (la vecchia regola della prima lettera non esiste piu').

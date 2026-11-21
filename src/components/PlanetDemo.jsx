@@ -59,7 +59,7 @@ function noiseAt(dir) {
 // Water is concentrated into exactly two seas instead of scattered wherever the
 // noise happens to dip — each sea is a region around a fixed center direction.
 let SEA_CENTERS = [new THREE.Vector3(0.6, -0.3, 0.7).normalize()]; // un unico mare grande
-const SEA_RADIUS = 0.86; // radianti: stessa superficie dei due mari di prima messi insieme
+let SEA_RADIUS = 0.86; // radianti: stessa superficie dei due mari di prima messi insieme
 function seaMask(dir) {
   let m = 0;
   for (const c of SEA_CENTERS) {
@@ -189,7 +189,8 @@ const BIOMES = {
   },
   alien: {
     palette: { sand: "#d9bfd0", grass: "#5f8a93", rock: "#7d6f93", snow: "#eae6ff", trunk: "#4a3a5c", foliage: "#3f7f86" },
-    sea: "#8a62c4", seaShallow: "#c49be8", seaDeep: "#4a2a86", seaFoam: "#f6e8ff", seaGlow: "#6a2fc0",
+    // lago di lava: crosta scura sulla riva, arancio vivo vicino, rosso in profondita'; brilla sempre e fa le bolle
+    sea: "#e2541c", seaShallow: "#ffa12a", seaDeep: "#c8301a", seaFoam: "#2e1a14", seaGlow: "#ff5a14", lava: true,
     pathCore: "#b7c0d4", pathEdge: "#6f7894", lamp: "#8ff3ff", lampPost: "#9aa3b8", lowGravity: true, metalSteps: true, crystals: true, centerModel: "/models/space/GeodesicDome.gltf",
     skyTop: "#6d4fa0", skyHorizon: "#f3c9dc", fog: "#d8b8d6", fogTint: "#f6dcea",
     // Mako (lo squalo) e' passato qui: robusto come gli astronauti, e i mondi hanno 6 personaggi ciascuno
@@ -235,6 +236,8 @@ const DECOR_TARGET_H = { tree: 7.5, rock: 2.3, bush: 1.6 };
 const LEGACY_WORLD = { NOISE_WAVES, SEA_CENTERS, MOUNTAINS, HILLS };
 function configureWorld(code, style = "temperate") {
   TERRAIN_PADS = [];
+  SEA_FLAT = style === "alien" ? 0.92 : 0.42; // il lago di lava e' piatto (niente cupola)
+  SEA_RADIUS = style === "alien" ? 0.56 : 0.86; // sul pianeta alieno e' un lago (di lava), non un mare
   TERRAIN_STYLE = style;
   CRATERS = [];
   if (!code) ({ NOISE_WAVES, SEA_CENTERS, MOUNTAINS, HILLS } = LEGACY_WORLD);
@@ -253,6 +256,7 @@ function configureWorld(code, style = "temperate") {
       }
     }
   };
+  if (style === "city") SEA_CENTERS = []; // la citta' non ha mare
   if (!code) { placeCraters(); return; }
   const rv = () => new THREE.Vector3(R() * 2 - 1, R() * 2 - 1, R() * 2 - 1).normalize();
   const START = new THREE.Vector3(0, 1, 0); // il punto di partenza deve restare terra
@@ -269,11 +273,12 @@ function configureWorld(code, style = "temperate") {
   const seaAvoid = SEA_CENTERS.map((c) => [c, SEA_RADIUS * 0.8]);
   MOUNTAINS = [[0.58, 8.0], [0.52, 7.0], [0.5, 6.2], [0.4, 5.0]].map(([r, h]) => ({ c: pick(r * 0.7 + 0.2, seaAvoid), r, h }));
   HILLS = [{ v: rv(), f: 7.5, p: R() * 6.28 }, { v: rv(), f: 9.1, p: R() * 6.28 }];
+  if (style === "city") SEA_CENTERS = []; // la citta' non ha mare
   placeCraters();
 }
 // Superficie del mare piu' piatta del pianeta: verso il centro di ogni mare scende un po',
 // cosi' su un pianeta piccolo il mare non sembra una cupola. A riva coincide con SEA_LEVEL.
-const SEA_FLAT = 0.42;
+let SEA_FLAT = 0.42;
 // conca del mare: quanto scende la superficie (e con lei tutto il bacino, fondale e rive comprese).
 // Profilo con pendenza zero sul bordo: niente gradino dove la conca comincia.
 function seaDrop(dir) {
@@ -616,20 +621,91 @@ export default function PlanetDemo() {
     const seaMat = new THREE.MeshToonMaterial({ vertexColors: true, gradientMap });
     // cose che di notte si illuminano (mare alieno, alberi alieni, cristalli): intensita' aggiornata col ciclo giorno/notte
     const nightGlow = []; // { mat, day, night }
-    if (BIOME.seaGlow) { seaMat.emissive = new THREE.Color(BIOME.seaGlow); nightGlow.push({ mat: seaMat, day: 0.25, night: 0.9 }); }
+    if (BIOME.seaGlow && !BIOME.lava) { seaMat.emissive = new THREE.Color(BIOME.seaGlow); nightGlow.push({ mat: seaMat, day: 0.25, night: 0.9 }); }
+    if (BIOME.lava) seaMat.emissive = new THREE.Color("#ffffff");
     seaMat.onBeforeCompile = (sh) => {
       sh.uniforms.uTime = seaUniforms.uTime;
       sh.vertexShader = "uniform float uTime;\n" + sh.vertexShader.replace(
         "#include <begin_vertex>",
-        `#include <begin_vertex>
+        BIOME.lava
+          ? `#include <begin_vertex>
+        // lava: onde lente e pesanti
+        float wv = sin(dot(position, vec3(0.9, 0.4, 0.7)) * 1.1 + uTime * 0.35) * 0.5 + sin(dot(position, vec3(-0.5, 0.8, 0.3)) * 1.7 - uTime * 0.5) * 0.5;
+        transformed += normalize(position) * wv * 0.08;
+        vLavaP = position;`
+          : `#include <begin_vertex>
         float wv = sin(dot(position, vec3(0.9, 0.4, 0.7)) * 1.3 + uTime * 1.1) * 0.5 + sin(dot(position, vec3(-0.5, 0.8, 0.3)) * 2.1 - uTime * 1.5) * 0.5;
         transformed += normalize(position) * wv * 0.05;
         vColor.rgb += vec3(0.05) * smoothstep(0.6, 1.0, wv);`
       );
+      // la lava brilla del suo colore (la crosta scura quasi niente), di giorno e di notte
+      if (BIOME.lava) {
+        sh.vertexShader = "varying vec3 vLavaP;\n" + sh.vertexShader;
+        // crosta che si crepa: placche scure separate da fessure incandescenti che scorrono lentamente
+        sh.fragmentShader = "uniform float uTime;\nvarying vec3 vLavaP;\n" + sh.fragmentShader
+          .replace("#include <color_fragment>", `#include <color_fragment>
+          vec3 q = vLavaP * 0.33 + vec3(uTime * 0.05, -uTime * 0.035, uTime * 0.02);
+          float n = sin(q.x * 2.1 + sin(q.y * 1.7)) + sin(q.y * 2.6 + sin(q.z * 1.3)) + sin(q.z * 2.3 + sin(q.x * 1.9));
+          float crack = 1.0 - smoothstep(0.0, 0.22, abs(n));
+          float plate = smoothstep(-1.5, 1.5, n);
+          float hot = step(0.15, vColor.r - vColor.b);
+          vec3 lavaCol = mix(vec3(0.55, 0.09, 0.03), vColor.rgb, 0.55 + 0.25 * plate);
+          lavaCol = mix(lavaCol, vec3(1.0, 0.85, 0.32), crack);
+          diffuseColor.rgb = mix(diffuseColor.rgb, lavaCol, hot);`)
+          .replace("#include <emissivemap_fragment>", "#include <emissivemap_fragment>\n totalEmissiveRadiance = diffuseColor.rgb * diffuseColor.rgb * 0.9;");
+      }
     };
     const sea = new THREE.Mesh(seaGeo, seaMat);
-    sea.receiveShadow = true;
+    sea.receiveShadow = !BIOME.lava;
     scene.add(sea);
+
+    // ---------- Bolle di lava: si gonfiano, scoppiano e lasciano un anello che si allarga ----------
+    const lavaBubbles = [];
+    if (BIOME.lava) {
+      const spots = [];
+      for (let i = 0; i < seaPos.length; i += 9) {
+        const d = new THREE.Vector3(seaPos[i], seaPos[i + 1], seaPos[i + 2]).normalize();
+        if (seaSurfaceH(d) - terrainHeight(d) > 0.7) spots.push(d);
+      }
+      const bubbleGeo = new THREE.SphereGeometry(1, 12, 8, 0, Math.PI * 2, 0, Math.PI / 2); // cupola
+      const ringGeo = new THREE.RingGeometry(0.75, 1, 20);
+      const br = mulberry32(hashStr((worldCode || "legacy") + "lava"));
+      for (let i = 0; i < Math.min(34, spots.length); i++) {
+        const d = spots[Math.floor(br() * spots.length)];
+        const g = new THREE.Group();
+        g.position.copy(d).multiplyScalar(PLANET_R + seaSurfaceH(d) + 0.02);
+        g.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), d);
+        const dome = new THREE.Mesh(bubbleGeo, new THREE.MeshBasicMaterial({ color: "#ffb547" }));
+        const ring = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({ color: "#ffd27a", transparent: true, opacity: 0, side: THREE.DoubleSide, depthWrite: false }));
+        ring.rotation.x = -Math.PI / 2; ring.position.y = 0.04;
+        const drops = [0, 1, 2, 3].map(() => { const m = new THREE.Mesh(new THREE.SphereGeometry(0.07, 6, 4), new THREE.MeshBasicMaterial({ color: "#ffcf5c" })); m.visible = false; g.add(m); return m; });
+        g.add(dome, ring);
+        scene.add(g);
+        lavaBubbles.push({ g, dome, ring, drops, size: 0.25 + br() * 0.4, period: 2.5 + br() * 3.5, phase: br() * 10, ang: br() * 6.28 });
+      }
+    }
+    function updateLava(t) {
+      for (const b of lavaBubbles) {
+        const u = ((t + b.phase) % b.period) / b.period; // 0..1: gonfia fino a 0.7, poi scoppia
+        if (u < 0.7) {
+          const k = u / 0.7;
+          b.dome.visible = true;
+          b.dome.scale.set(b.size * k, b.size * k * 0.9, b.size * k);
+          b.ring.material.opacity = 0;
+          b.drops.forEach((m) => (m.visible = false));
+        } else {
+          const k = (u - 0.7) / 0.3;
+          b.dome.visible = false;
+          b.ring.scale.setScalar(b.size * (1 + k * 2.2));
+          b.ring.material.opacity = 0.8 * (1 - k);
+          b.drops.forEach((m, i) => {
+            const a = b.ang + i * 1.57;
+            m.visible = k < 0.9;
+            m.position.set(Math.cos(a) * b.size * (0.3 + k * 1.4), b.size * (2.2 * k - 2.6 * k * k) + 0.05, Math.sin(a) * b.size * (0.3 + k * 1.4));
+          });
+        }
+      }
+    }
 
     // ---------- Clouds: small fluffy low-poly clusters drifting around the planet ----------
     const cloudMat = new THREE.MeshBasicMaterial({ color: "#ffffff" });
@@ -3601,6 +3677,7 @@ export default function PlanetDemo() {
       const dt = Math.min(0.05, clock.getDelta());
       const t = clock.elapsedTime;
       seaUniforms.uTime.value = t;
+      if (lavaBubbles.length) updateLava(t);
       quality.sample(clock.elapsedTime - (quality._last ?? clock.elapsedTime)); quality._last = clock.elapsedTime;
       if (mixer) mixer.update(dt);
 
