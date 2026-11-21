@@ -2741,12 +2741,22 @@ export default function PlanetDemo() {
     }
     enterBtn.addEventListener("pointerdown", (e) => { e.stopPropagation(); closeSplash(); });
 
-    // ---------- Minimappa (proiezione azimutale centrata su di te, "avanti" = su) ----------
-    let MAP_PX = 112, MAP_RES = 36, MAP_ANG = 1.5, mapBig = false, mapZoom = 1;
-    const MAP_FULL = Math.PI * 0.995;
+    // ---------- Minimappa: mappa PIANA (equirettangolare, nord in alto, come un planisfero) ----------
+    // assi della carta: il punto di partenza sta sull'equatore, a longitudine 0
+    const MAP_P = new THREE.Vector3().crossVectors(charDir, new THREE.Vector3(0, 0, 1));
+    if (MAP_P.lengthSq() < 1e-4) MAP_P.set(1, 0, 0);
+    MAP_P.normalize();
+    const MAP_E1 = charDir.clone().addScaledVector(MAP_P, -charDir.dot(MAP_P)).normalize();
+    const MAP_E2 = new THREE.Vector3().crossVectors(MAP_P, MAP_E1).normalize();
+    const lonOf = (d) => Math.atan2(d.dot(MAP_E2), d.dot(MAP_E1));
+    const latOf = (d) => Math.asin(Math.max(-1, Math.min(1, d.dot(MAP_P))));
+    const wrapPI = (a) => { a = (a + Math.PI) % (2 * Math.PI); if (a < 0) a += 2 * Math.PI; return a - Math.PI; };
+    const SMALL_SPAN = 1.6; // radianti mostrati dalla minimappa piccola
+    let MAP_PX = 112, MAP_RES = 36, MAP_SPAN = SMALL_SPAN, mapBig = false, mapZoom = 1;
+    const MAP_B = 3; // spessore cornice
     const mapCanvas = document.createElement("canvas");
     mapCanvas.width = MAP_PX; mapCanvas.height = MAP_PX;
-    Object.assign(mapCanvas.style, { position: "absolute", top: "12px", left: "12px", width: MAP_PX + "px", height: MAP_PX + "px", borderRadius: "10px", border: "3px solid rgba(255,255,255,.75)", background: "#123", zIndex: 22, boxShadow: "0 2px 10px rgba(0,0,0,.3)" });
+    Object.assign(mapCanvas.style, { position: "absolute", top: "12px", left: "12px", width: MAP_PX + "px", height: MAP_PX + "px", boxSizing: "content-box", borderRadius: "10px", border: MAP_B + "px solid rgba(255,255,255,.75)", background: "#123", zIndex: 22, boxShadow: "0 2px 10px rgba(0,0,0,.3)" });
     mount.appendChild(mapCanvas);
     const mctx = mapCanvas.getContext("2d");
     const mapTmp = document.createElement("canvas");
@@ -2757,45 +2767,57 @@ export default function PlanetDemo() {
     const mapBackdrop = document.createElement("div");
     Object.assign(mapBackdrop.style, { position: "absolute", inset: "0", background: "rgba(10,20,25,0.55)", zIndex: 44, display: "none" });
     mount.appendChild(mapBackdrop);
+    const MAP_BTN = 46, MAP_GAP = 12;
+    const bigSpan = () => Math.PI / mapZoom; // zoom 1: tutta l'altezza del pianeta (polo-polo)
     function applyMapSize() {
-      MAP_PX = mapBig ? Math.max(220, Math.min(380, window.innerWidth - 32, window.innerHeight - 100)) : 112;
-      MAP_RES = mapBig ? 110 : 36;
-      MAP_ANG = mapBig ? MAP_FULL / mapZoom : 1.5;
-      mapCtl.style.display = mapBig ? "flex" : "none";
-      mapCtl.style.top = mapBig ? `calc(50% + ${MAP_PX / 2 + 12}px)` : "0";
+      const W = mount.clientWidth || window.innerWidth, H = mount.clientHeight || window.innerHeight;
+      if (mapBig) {
+        // mappa + fila di pulsanti devono stare entrambe dentro lo schermo, centrate
+        MAP_PX = Math.floor(Math.max(160, Math.min(440, W - 24 - 2 * MAP_B, H - 24 - 2 * MAP_B - MAP_GAP - MAP_BTN)));
+        const total = MAP_PX + 2 * MAP_B + MAP_GAP + MAP_BTN;
+        const top = Math.max(8, Math.round((H - total) / 2));
+        const left = Math.round((W - MAP_PX - 2 * MAP_B) / 2);
+        Object.assign(mapCanvas.style, { width: MAP_PX + "px", height: MAP_PX + "px", top: top + "px", left: left + "px", zIndex: 45 });
+        mapCtl.style.top = (top + MAP_PX + 2 * MAP_B + MAP_GAP) + "px";
+        mapCtl.style.display = "flex";
+        MAP_RES = 120;
+        MAP_SPAN = bigSpan();
+      } else {
+        MAP_PX = 112; MAP_RES = 36; MAP_SPAN = SMALL_SPAN;
+        Object.assign(mapCanvas.style, { width: "112px", height: "112px", top: "12px", left: "12px", zIndex: 22 });
+        mapCtl.style.display = "none";
+      }
       mapCanvas.width = MAP_PX; mapCanvas.height = MAP_PX;
       mapTmp.width = MAP_RES; mapTmp.height = MAP_RES;
       mapImg = mtx.createImageData(MAP_RES, MAP_RES);
-      Object.assign(mapCanvas.style, mapBig
-        ? { width: MAP_PX + "px", height: MAP_PX + "px", top: "50%", left: "50%", transform: "translate(-50%,-50%)", zIndex: 45 }
-        : { width: "112px", height: "112px", top: "12px", left: "12px", transform: "none", zIndex: 22 });
       mapBackdrop.style.display = mapBig ? "block" : "none";
       mapTimer = 0;
     }
+    window.addEventListener("resize", () => { if (mapBig) applyMapSize(); });
     mapCanvas.style.pointerEvents = "auto";
     mapCanvas.style.cursor = "pointer";
     mapCanvas.style.touchAction = "none";
     const mapCtl = document.createElement("div");
-    Object.assign(mapCtl.style, { position: "absolute", left: "50%", transform: "translateX(-50%)", display: "none", gap: "12px", zIndex: 46 });
+    Object.assign(mapCtl.style, { position: "absolute", left: "0", right: "0", display: "none", justifyContent: "center", gap: MAP_GAP + "px", zIndex: 46, pointerEvents: "none" });
     const mapBtn = (label, fn) => {
       const b = document.createElement("div");
       b.textContent = label;
-      Object.assign(b.style, { width: "46px", height: "46px", borderRadius: "50%", background: "rgba(255,255,255,0.92)", color: "#223", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "24px", fontWeight: "700", cursor: "pointer", userSelect: "none", touchAction: "none", font: "700 22px system-ui, sans-serif" });
+      Object.assign(b.style, { width: MAP_BTN + "px", height: MAP_BTN + "px", flex: "0 0 auto", borderRadius: "50%", background: "rgba(255,255,255,0.92)", color: "#223", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", userSelect: "none", touchAction: "none", pointerEvents: "auto", boxShadow: "0 2px 8px rgba(0,0,0,.3)", font: "700 22px system-ui, sans-serif" });
       b.addEventListener("pointerdown", (e) => { e.stopPropagation(); fn(); });
       mapCtl.appendChild(b);
     };
-    const setZoom = (z) => { mapZoom = Math.max(1, Math.min(4, z)); MAP_ANG = MAP_FULL / mapZoom; mapTimer = 0; };
-    // vista spostabile: quando trascini la mappa grande il centro non segue piu' il personaggio
-    let mapPanned = false;
-    const mapC = new THREE.Vector3(), mapF = new THREE.Vector3();
+    // centro della carta (lon/lat); segue il personaggio finche' non trascini
+    let mapPanned = false, mapLonC = 0, mapLatC = 0;
+    const clampLat = (lat) => { const m = Math.max(0, Math.PI / 2 - MAP_SPAN / 2); return Math.max(-m, Math.min(m, lat)); };
+    const setZoom = (z) => { mapZoom = Math.max(1, Math.min(6, z)); MAP_SPAN = bigSpan(); mapLatC = clampLat(mapLatC); mapTimer = 0; };
     const recenterMap = () => { mapPanned = false; mapTimer = 0; };
     const closeMap = () => { mapBig = false; mapZoom = 1; recenterMap(); applyMapSize(); };
-    mapBtn("\u2212", () => setZoom(mapZoom / 1.5));
+    mapBtn("−", () => setZoom(mapZoom / 1.5));
     mapBtn("+", () => setZoom(mapZoom * 1.5));
-    mapBtn("\u25CE", recenterMap);
-    mapBtn("\u2715", closeMap);
+    mapBtn("◎", recenterMap);
+    mapBtn("✕", closeMap);
     mount.appendChild(mapCtl);
-    // piccola: un tocco la apre. Grande: un tocco NON la chiude; zoom con +/- , rotella o pinch (due dita).
+    // piccola: un tocco la apre. Grande: un dito trascina, due dita/rotella/+- fanno lo zoom.
     const mapPtrs = new Map();
     let pinchD0 = 0, pinchZ0 = 1;
     mapCanvas.addEventListener("pointerdown", (e) => {
@@ -2804,25 +2826,19 @@ export default function PlanetDemo() {
       mapPtrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
       if (mapPtrs.size === 2) { const [a, b] = [...mapPtrs.values()]; pinchD0 = Math.hypot(a.x - b.x, a.y - b.y); pinchZ0 = mapZoom; }
     });
-    const panAx = new THREE.Vector3(), panR = new THREE.Vector3();
     mapCanvas.addEventListener("pointermove", (e) => {
       if (!mapPtrs.has(e.pointerId)) return;
       const prev = mapPtrs.get(e.pointerId);
       mapPtrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
       if (mapPtrs.size === 2 && pinchD0 > 0) { const [a, b] = [...mapPtrs.values()]; setZoom(pinchZ0 * (Math.hypot(a.x - b.x, a.y - b.y) / pinchD0)); return; }
       if (mapPtrs.size !== 1 || !mapBig) return;
-      // un dito: trascino la mappa (il terreno segue il dito)
       const dx = e.clientX - prev.x, dy = e.clientY - prev.y;
       if (dx === 0 && dy === 0) return;
-      if (!mapPanned) { mapC.copy(charDir); mapF.copy(facing); mapPanned = true; }
-      const radPerPx = MAP_ANG / (MAP_PX / 2);
-      panR.crossVectors(mapF, mapC).normalize();
-      // spostare il centro verso -dx (destra/sinistra) e +dy (avanti/indietro)
-      panAx.copy(panR).multiplyScalar(-dy).addScaledVector(mapF, -dx).normalize();
-      const a = Math.hypot(dx, dy) * radPerPx;
-      mapC.applyAxisAngle(panAx, a).normalize();
-      mapF.applyAxisAngle(panAx, a);
-      mapF.addScaledVector(mapC, -mapF.dot(mapC)).normalize();
+      if (!mapPanned) { mapLonC = lonOf(charDir); mapLatC = clampLat(latOf(charDir)); mapPanned = true; }
+      // la carta segue il dito: in orizzontale gira all'infinito, in verticale si ferma ai poli
+      const radPerPx = MAP_SPAN / MAP_PX;
+      mapLonC = wrapPI(mapLonC - dx * radPerPx);
+      mapLatC = clampLat(mapLatC + dy * radPerPx);
       mapTimer = 0;
     });
     const mapUp = (e) => mapPtrs.delete(e.pointerId);
@@ -2830,24 +2846,17 @@ export default function PlanetDemo() {
     mapCanvas.addEventListener("pointercancel", mapUp);
     mapCanvas.addEventListener("wheel", (e) => { if (!mapBig) return; e.preventDefault(); setZoom(mapZoom * (e.deltaY < 0 ? 1.2 : 1 / 1.2)); }, { passive: false });
     mapBackdrop.addEventListener("pointerdown", (e) => { e.stopPropagation(); closeMap(); });
-    const mpR = new THREE.Vector3(), mpD = new THREE.Vector3(), mpT = new THREE.Vector3();
-    const vC = new THREE.Vector3(), vF = new THREE.Vector3();
+    const mpD = new THREE.Vector3(), mpE = new THREE.Vector3(), mpN = new THREE.Vector3();
+    let vLon = 0, vLat = 0; // centro della vista corrente
     // colori della mappa presi dalla stessa palette del terreno e del mare
     const toRGB = (c) => [Math.round(c.r * 255), Math.round(c.g * 255), Math.round(c.b * 255)];
     const MC = { sand: toRGB(sandC), grass: toRGB(grassC.clone().lerp(new THREE.Color("#c9c27a"), 0.2)), rock: toRGB(rockC), snow: toRGB(snowC), shallow: toRGB(seaShallow), deep: toRGB(seaDeep), path: toRGB(new THREE.Color(BIOME.pathCore)), road: [70, 72, 76], walk: [166, 162, 154], block: [128, 124, 118] };
     const mix = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
-    // proietta una direzione sulla mappa (null se fuori dal cerchio)
+    // proietta una direzione sulla carta piana (null se fuori dal riquadro)
     function mapProject(d, limit) {
-      const dp = d.dot(vC);
-      const ang = Math.acos(Math.min(1, Math.max(-1, dp)));
-      if (ang > MAP_ANG * 1.42) return null;
-      const Rm = MAP_PX / 2;
-      mpT.copy(d).addScaledVector(vC, -dp);
-      const tl = mpT.length();
-      if (tl < 1e-5) return { x: Rm, y: Rm };
-      const rr = (ang / MAP_ANG) * Rm;
-      const q = { x: Rm + (mpT.dot(mpR) / tl) * rr, y: Rm - (mpT.dot(vF) / tl) * rr };
-      const m = (1 - limit) * MAP_PX + 4; // margine dal bordo quadrato
+      const s = MAP_PX / MAP_SPAN;
+      const q = { x: MAP_PX / 2 + wrapPI(lonOf(d) - vLon) * s, y: MAP_PX / 2 - (latOf(d) - vLat) * s };
+      const m = (1 - limit) * MAP_PX + 4; // margine dal bordo
       if (q.x < m || q.y < m || q.x > MAP_PX - m || q.y > MAP_PX - m) return null;
       return q;
     }
@@ -2855,18 +2864,17 @@ export default function PlanetDemo() {
       mapTimer -= dt;
       if (mapTimer > 0) return;
       mapTimer = mapBig ? 0.5 : 0.25;
-      vC.copy(mapPanned ? mapC : charDir);
-      vF.copy(mapPanned ? mapF : facing);
-      mpR.crossVectors(vF, vC).normalize();
+      if (mapPanned && mapBig) { vLon = mapLonC; vLat = mapLatC; }
+      else { vLon = lonOf(charDir); vLat = mapBig ? clampLat(latOf(charDir)) : latOf(charDir); }
       for (let j = 0; j < MAP_RES; j++) {
+        const lat = vLat + (0.5 - (j + 0.5) / MAP_RES) * MAP_SPAN;
+        const outside = lat > Math.PI / 2 || lat < -Math.PI / 2;
+        const cl = Math.cos(lat), sl = Math.sin(lat);
         for (let i = 0; i < MAP_RES; i++) {
-          const px = ((i + 0.5) / MAP_RES) * 2 - 1, py = ((j + 0.5) / MAP_RES) * 2 - 1;
-          const r = Math.hypot(px, py);
           const o = (j * MAP_RES + i) * 4;
-          // mappa quadrata: si riempiono anche gli angoli (proiezione centrata sul giocatore)
-          const ang = r * MAP_ANG;
-          const k = r > 0.0001 ? Math.sin(ang) / r : 0;
-          mpD.copy(vC).multiplyScalar(Math.cos(ang)).addScaledVector(mpR, px * k).addScaledVector(vF, -py * k).normalize();
+          if (outside) { mapImg.data[o] = 18; mapImg.data[o + 1] = 34; mapImg.data[o + 2] = 51; mapImg.data[o + 3] = 255; continue; }
+          const lon = vLon + ((i + 0.5) / MAP_RES - 0.5) * MAP_SPAN;
+          mpD.copy(MAP_E1).multiplyScalar(cl * Math.cos(lon)).addScaledVector(MAP_E2, cl * Math.sin(lon)).addScaledVector(MAP_P, sl);
           const h = terrainHeight(mpD);
           const above = h - seaSurfaceH(mpD);
           let c;
@@ -2908,11 +2916,13 @@ export default function PlanetDemo() {
         mctx.fillStyle = "#4fe3ff"; mctx.strokeStyle = "#fff"; mctx.lineWidth = 2;
         mctx.beginPath(); mctx.arc(q.x, q.y, mapBig ? 6 : 4, 0, 6.283); mctx.fill(); mctx.stroke();
       });
-      // io: freccia orientata come il mio sguardo (al centro se la mappa non e' spostata)
+      // io: freccia orientata come il mio sguardo
       const me = mapProject(charDir, 0.99);
       if (me) {
-        const fx = facing.dot(mpR), fy = facing.dot(vF);
-        const rot = Math.atan2(fx, fy);
+        // nord in alto: la freccia ruota secondo dove guardo
+        mpE.crossVectors(MAP_P, charDir).normalize();
+        mpN.crossVectors(charDir, mpE).normalize();
+        const rot = Math.atan2(facing.dot(mpE), facing.dot(mpN));
         mctx.save(); mctx.translate(me.x, me.y); mctx.rotate(rot);
         mctx.fillStyle = "#fff"; mctx.strokeStyle = "#222"; mctx.lineWidth = 1.5;
         mctx.beginPath(); mctx.moveTo(0, -7); mctx.lineTo(5, 5); mctx.lineTo(-5, 5); mctx.closePath(); mctx.fill(); mctx.stroke();
