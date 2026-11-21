@@ -223,11 +223,12 @@ BIOMES.city = {
   decorH: { tree: 6.5, rock: 0.7, bush: 0.8 },
   // palazzi del Downtown City MegaKit (porta sul lato +Z), rimpiccioliti a misura di villaggio
   houses: [{ path: "/models/city/Building_Large_2.gltf", rotY: 0 }, { path: "/models/city/Building_Small_1.gltf", rotY: 0 }, { path: "/models/city/Building_Medium_2_001.gltf", rotY: 0 }],
+  // palazzi grandi quanto l'isolato (la citta' e' fitta, non casette nel prato)
   buildingTypes: [
     { name: "long", x0: -3.1, x1: 3.1, z0: -2.6, z1: 2.4, h: 8.4, roofH: 0.4, roomKey: "large" },
     { name: "tower", x0: -2.35, x1: 2.35, z0: -2.8, z1: 2.7, h: 6.5, roofH: 0.4, roomKey: "small" },
     { name: "ship", x0: -2.5, x1: 2.5, z0: -2.2, z1: 2.1, h: 8.3, roofH: 0.4, roomKey: "medium" },
-  ],
+  ].map((t) => ({ ...t, x0: t.x0 * 1.3, x1: t.x1 * 1.3, z0: t.z0 * 1.3, z1: t.z1 * 1.3, h: t.h * 1.3 })),
 };
 // altezze di riferimento dei nostri modelli: i modelli di altri biomi vengono portati alla stessa misura
 const DECOR_TARGET_H = { tree: 7.5, rock: 2.3, bush: 1.6 };
@@ -311,7 +312,9 @@ function baseTerrainHeight(dir) {
   const flat = 1 - coastBand(dir);
   const landH = TERRAIN_STYLE === "alien"
     ? noise * 0.45 + 1.0 + (cratersAt(dir) + mountainAt(dir) * 0.3) * flat // crateri e altipiani (le guglie sono cristalli a parte)
-    : noise * 0.55 + 1.0 + (hillsAt(dir) + mountainAt(dir)) * flat; // colline e montagne vere
+    : TERRAIN_STYLE === "city"
+      ? noise * 0.22 + 1.1 // citta': pianura (strade e palazzi ovunque, niente colline)
+      : noise * 0.55 + 1.0 + (hillsAt(dir) + mountainAt(dir)) * flat; // colline e montagne vere
   const seaH = noise * 0.3 - 3.6; // fondale: il mare e' opaco, basta che sia sotto la superficie (spiaggia dolce)
   // spiaggia: vicino a riva il fondale scende piano (mask^2), piu' al largo diventa profondo
   const m = mask * mask;
@@ -715,7 +718,73 @@ export default function PlanetDemo() {
         if (ok) VILLAGES.push(c.clone());
       }
     }
-    const nearVillage = (d) => VILLAGES.some((v) => v.angleTo(d) < 0.5);
+    // ---------- Citta': una griglia di strade su tutto il pianeta ----------
+    // Il pianeta e' diviso nelle 6 facce di un cubo; su ogni faccia le strade corrono a angoli costanti
+    // (alfa, beta) ogni CITY_STEP radianti: 4x4 isolati per faccia, le strade continuano da una faccia all'altra.
+    const CITY = biomeKey === "city";
+    const CITY_STEP = Math.PI / 8; // ~15,7 m tra due strade
+    const CITY_AH = 2.4 / PLANET_R, CITY_SW = 3.6 / PLANET_R; // meta' carreggiata, fine del marciapiede (radianti)
+    const CITY_FACES = [
+      [new THREE.Vector3(0, 1, 0), new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 0, -1)],
+      [new THREE.Vector3(0, -1, 0), new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 0, 1)],
+      [new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 0, -1), new THREE.Vector3(0, 1, 0)],
+      [new THREE.Vector3(-1, 0, 0), new THREE.Vector3(0, 0, 1), new THREE.Vector3(0, 1, 0)],
+      [new THREE.Vector3(0, 0, 1), new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 1, 0)],
+      [new THREE.Vector3(0, 0, -1), new THREE.Vector3(-1, 0, 0), new THREE.Vector3(0, 1, 0)],
+    ];
+    const faceDir = (F, al, be) => F[0].clone().addScaledVector(F[1], Math.tan(al)).addScaledVector(F[2], Math.tan(be)).normalize();
+    function cityCoords(d) {
+      let fi = 0, best = -2;
+      CITY_FACES.forEach((F, i) => { const k = d.dot(F[0]); if (k > best) { best = k; fi = i; } });
+      const F = CITY_FACES[fi];
+      return { fi, al: Math.atan2(d.dot(F[1]), best), be: Math.atan2(d.dot(F[2]), best) };
+    }
+    const nearLine = (a) => { const k = Math.round(a / CITY_STEP); return { dist: Math.abs(a - k * CITY_STEP), k }; };
+    const cityBlocks = []; // { fi, i, j, al, be, kind, d }
+    const blockOf = new Map();
+    // che cosa c'e' in un punto: "street", "sidewalk", oppure il tipo dell'isolato
+    function cityKindAt(d) {
+      const c = cityCoords(d);
+      const la = nearLine(c.al).dist, lb = nearLine(c.be).dist;
+      if (Math.min(la, lb) < CITY_AH) return "street";
+      if (Math.min(la, lb) < CITY_SW) return "sidewalk";
+      const i = Math.floor((c.al + Math.PI / 4) / CITY_STEP), j = Math.floor((c.be + Math.PI / 4) / CITY_STEP);
+      const b = blockOf.get(c.fi * 100 + Math.min(3, i) * 10 + Math.min(3, j));
+      return b ? b.kind : "lot";
+    }
+    if (CITY) {
+      const kr = mulberry32(hashStr((worldCode || "legacy") + "blocks"));
+      CITY_FACES.forEach((F, fi) => {
+        for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) {
+          const al = -Math.PI / 4 + (i + 0.5) * CITY_STEP, be = -Math.PI / 4 + (j + 0.5) * CITY_STEP;
+          const d = faceDir(F, al, be);
+          // isolato sull'acqua o sulla riva: niente (resta il lungomare)
+          let wet = false;
+          for (const [da, db] of [[0, 0], [0.5, 0.5], [-0.5, 0.5], [0.5, -0.5], [-0.5, -0.5]]) {
+            const q = faceDir(F, al + da * CITY_STEP, be + db * CITY_STEP);
+            if (terrainHeight(q) < seaSurfaceH(q) + 0.6) wet = true;
+          }
+          const r = kr();
+          const kind = wet ? "shore" : r < 0.56 ? "building" : r < 0.72 ? "parking" : r < 0.86 ? "park" : "lot";
+          const b = { fi, i, j, al, be, kind, d };
+          cityBlocks.push(b);
+          blockOf.set(fi * 100 + i * 10 + j, b);
+        }
+      });
+      // 6 isolati diventano piazze per i luoghi speciali (lontani tra loro, su facce diverse)
+      const free = cityBlocks.filter((b) => b.kind !== "shore");
+      const spots = [];
+      for (const b of free.sort((x, y) => ((x.i + x.j * 3 + x.fi * 7) % 5) - ((y.i + y.j * 3 + y.fi * 7) % 5))) {
+        if (spots.length >= 6) break;
+        if (spots.some((o) => o.d.angleTo(b.d) < 0.75)) continue;
+        if (b.d.angleTo(new THREE.Vector3(0, 1, 0)) < 0.25) continue;
+        b.kind = "plaza"; spots.push(b);
+      }
+      VILLAGES.length = 0;
+      [0, 2, 4, 3].forEach((fi) => VILLAGES.push(CITY_FACES[fi][0].clone())); // (solo per i test)
+    }
+    const CITY_PLACE_SPOTS = cityBlocks.filter((b) => b.kind === "plaza").map((b) => b.d);
+    const nearVillage = (d) => (CITY ? !["park", "lot"].includes(cityKindAt(d)) : VILLAGES.some((v) => v.angleTo(d) < 0.5));
     // ---------- Pianeta alieno: guglie di cristallo al posto delle montagne (brillano di notte) ----------
     if (BIOME.crystals) {
       const crystMats = ["#b58cff", "#7fe0ff", "#ff9ad5"].map((c) => {
@@ -756,6 +825,7 @@ export default function PlanetDemo() {
       const h = terrainHeight(d);
       if (h < seaSurfaceH(d) + 0.5) continue; // spiagge libere
       if (nearVillage(d)) continue;
+      if (CITY && cityKindAt(d) === "lot" && rand() < 0.5) continue;
       const surf = getSurfacePoint(d);
       // le piante crescono verso il cielo, non perpendicolari al pendio; sui pendii ripidi solo rocce
       const upness = surf.normal.dot(d);
@@ -1186,7 +1256,221 @@ export default function PlanetDemo() {
     }
     const woodPostMat = new THREE.MeshToonMaterial({ color: "#6b4a2e", gradientMap });
     const VILLAGE_ORDERS = [[0, 2, 1, 2, 1, 0, 2], [1, 0, 2, 0, 1, 2], [2, 1, 0, 1, 2, 0], [0, 1, 2, 1, 0]];
-    VILLAGES.forEach((vc, vi) => {
+    // modelli della citta': caricati una volta, convertiti in toon, clonati dove servono
+    const cityModelCache = new Map();
+    const cityMats = new Map();
+    function cityModel(path) {
+      if (!cityModelCache.has(path)) {
+        cityModelCache.set(path, loadModelT(path).then((gl) => {
+          if (!gl) return null;
+          gl.scene.traverse((o) => {
+            if (!o.isMesh) return;
+            const om = o.material;
+            if (!cityMats.has(om.uuid)) cityMats.set(om.uuid, new THREE.MeshToonMaterial({ color: om.color, map: om.map, gradientMap, transparent: om.transparent, opacity: om.opacity }));
+            o.material = cityMats.get(om.uuid);
+            o.castShadow = true; o.receiveShadow = true;
+          });
+          return gl.scene;
+        }));
+      }
+      return cityModelCache.get(path);
+    }
+    // oggetto appoggiato al suolo in d; il lato +Z del modello guarda verso "toward" (tangente); fit = misura
+    function cityProp(path, d, toward, fit, solid = 0, fitBy = "max") {
+      d = d.clone().normalize();
+      const g = new THREE.Group();
+      g.position.copy(d).multiplyScalar(PLANET_R + terrainHeight(d));
+      const zDir = toward.clone().addScaledVector(d, -toward.dot(d)).normalize();
+      const xDir = new THREE.Vector3().crossVectors(d, zDir).normalize();
+      g.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(xDir, d, zDir));
+      scene.add(g);
+      groundProps.push(g);
+      cityModel(path).then((src) => {
+        if (!src) return;
+        const m = src.clone();
+        const bb = new THREE.Box3().setFromObject(m);
+        const sz = bb.getSize(new THREE.Vector3());
+        const k = fit / Math.max(0.01, fitBy === "h" ? sz.y : Math.max(sz.x, sz.y, sz.z));
+        m.scale.multiplyScalar(k);
+        m.position.set(-((bb.min.x + bb.max.x) / 2) * k, -bb.min.y * k, -((bb.min.z + bb.max.z) / 2) * k);
+        g.add(m);
+      });
+      if (solid > 0) obstacles.push({ dir: d.clone(), r: solid / PLANET_R });
+      return g;
+    }
+    // asfalto, marciapiedi e isolati disegnati su una texture per ogni faccia del cubo
+    function drawCityFace(F, fi) {
+      const N = 1024, cv = document.createElement("canvas");
+      cv.width = cv.height = N;
+      const x = cv.getContext("2d");
+      const Q = Math.PI / 4;
+      const px = (a) => ((a + Q) / (2 * Q)) * N, py = (b) => (1 - (b + Q) / (2 * Q)) * N, m = N / (2 * Q);
+      const rect = (a0, b0, a1, b1, c) => { x.fillStyle = c; x.fillRect(px(a0), py(b1), (a1 - a0) * m, (b1 - b0) * m); };
+      rect(-Q, -Q, Q, Q, "#a6a29a");
+      const IN = CITY_STEP / 2 - CITY_SW;
+      const lines = [-2, -1, 0, 1, 2].map((k) => k * CITY_STEP);
+      cityBlocks.filter((b) => b.fi === fi).forEach((b) => {
+        const col = { building: "#8f8b84", parking: "#55575b", park: "#6d7850", lot: "#7d7264", plaza: "#b9b2a4", shore: "#a6a29a" }[b.kind];
+        rect(b.al - IN, b.be - IN, b.al + IN, b.be + IN, col);
+        if (b.kind === "parking") for (let s = 0; s <= 4; s++) rect(b.al - IN + (s * 2 * IN) / 4 - 0.002, b.be - IN + 0.01, b.al - IN + (s * 2 * IN) / 4 + 0.002, b.be - IN + 0.12, "#e9e6dc");
+        if (b.kind === "plaza") { x.strokeStyle = "#8f887a"; x.lineWidth = 6; for (let r = 0.03; r < IN; r += 0.035) { x.beginPath(); x.arc(px(b.al), py(b.be), r * m, 0, 6.283); x.stroke(); } }
+        if (b.kind === "park") rect(b.al - 0.012, b.be - IN, b.al + 0.012, b.be + IN, "#c9b98f");
+      });
+      lines.forEach((l) => { rect(l - CITY_AH - 0.004, -Q, l + CITY_AH + 0.004, Q, "#6c6964"); rect(-Q, l - CITY_AH - 0.004, Q, l + CITY_AH + 0.004, "#6c6964"); });
+      lines.forEach((l) => { rect(l - CITY_AH, -Q, l + CITY_AH, Q, "#46484c"); rect(-Q, l - CITY_AH, Q, l + CITY_AH, "#46484c"); });
+      const crossNear = (t) => lines.some((l) => Math.abs(t - l) < CITY_AH + 0.035);
+      lines.forEach((l) => {
+        for (let t = -Q; t < Q; t += 0.04) {
+          if (crossNear(t) || crossNear(t + 0.022)) continue;
+          rect(l - 0.0018, t, l + 0.0018, t + 0.022, "#d7c060");
+          rect(t, l - 0.0018, t + 0.022, l + 0.0018, "#d7c060");
+        }
+      });
+      lines.forEach((a) => lines.forEach((b) => {
+        for (let k = -CITY_AH + 0.006; k < CITY_AH - 0.006; k += 0.017) {
+          [[a + CITY_AH + 0.008, a + CITY_AH + 0.035], [a - CITY_AH - 0.035, a - CITY_AH - 0.008]].forEach(([p0, p1]) => {
+            rect(p0, b + k, p1, b + k + 0.0085, "#ecebe4");
+            rect(b + k, p0, b + k + 0.0085, p1, "#ecebe4");
+          });
+        }
+      }));
+      const cr = mulberry32(hashStr((worldCode || "legacy") + "crack" + fi));
+      x.strokeStyle = "rgba(25,25,28,.5)"; x.lineWidth = 2;
+      for (let i = 0; i < 60; i++) {
+        let cx = cr() * N, cy = cr() * N;
+        x.beginPath(); x.moveTo(cx, cy);
+        for (let j = 0; j < 5; j++) { cx += (cr() - 0.5) * 40; cy += (cr() - 0.5) * 40; x.lineTo(cx, cy); }
+        x.stroke();
+      }
+      // dove c'e' il mare la citta' finisce: trasparente
+      x.globalCompositeOperation = "destination-out";
+      const G = 128, cell = N / G;
+      for (let gy = 0; gy < G; gy++) for (let gx = 0; gx < G; gx++) {
+        const al = -Q + ((gx + 0.5) / G) * 2 * Q, be = Q - ((gy + 0.5) / G) * 2 * Q;
+        const q = faceDir(F, al, be);
+        if (terrainHeight(q) < seaSurfaceH(q) + 0.35) x.fillRect(gx * cell - 0.5, gy * cell - 0.5, cell + 1, cell + 1);
+      }
+      x.globalCompositeOperation = "source-over";
+      const tex = new THREE.CanvasTexture(cv);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.anisotropy = 4;
+      return tex;
+    }
+    const cityPlates = [];
+    function buildCityPlates() {
+      cityPlates.forEach((p) => { scene.remove(p); p.geometry.dispose(); });
+      cityPlates.length = 0;
+      CITY_FACES.forEach((F, fi) => {
+        const n = 64, Q = Math.PI / 4, pos = [], uv = [], idx = [];
+        for (let j = 0; j <= n; j++) for (let i = 0; i <= n; i++) {
+          const al = -Q + (2 * Q * i) / n, be = -Q + (2 * Q * j) / n;
+          const d = faceDir(F, al, be);
+          const r = PLANET_R + terrainHeight(d) + 0.05;
+          pos.push(d.x * r, d.y * r, d.z * r);
+          uv.push(i / n, j / n);
+        }
+        for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) { const a = j * (n + 1) + i, b = a + 1, c = a + n + 1, e = c + 1; idx.push(a, b, e, a, e, c); }
+        const g = new THREE.BufferGeometry();
+        g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+        g.setAttribute("uv", new THREE.Float32BufferAttribute(uv, 2));
+        g.setIndex(idx);
+        g.computeVertexNormals();
+        if (!F.tex) F.tex = drawCityFace(F, fi);
+        const mesh = new THREE.Mesh(g, new THREE.MeshToonMaterial({ map: F.tex, gradientMap, alphaTest: 0.5, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }));
+        mesh.receiveShadow = true;
+        scene.add(mesh);
+        cityPlates.push(mesh);
+      });
+    }
+    function buildCity() {
+      const C = "/models/city/";
+      const cars = ["Vehicle_Sports", "Vehicle_Pickup", "Vehicle_Truck"];
+      const pr = mulberry32(hashStr((worldCode || "legacy") + "street"));
+      const IN = CITY_STEP / 2 - CITY_SW;
+      let ti = 0;
+      cityBlocks.forEach((b) => {
+        const F = CITY_FACES[b.fi];
+        const at = (da, db) => faceDir(F, b.al + da, b.be + db);
+        const tA = F[1], tB = F[2];
+        if (b.kind === "building") {
+          // il palazzo guarda una delle quattro strade intorno all'isolato: la facciata coi negozi e' sul marciapiede
+          const side = Math.floor(pr() * 4);
+          const fdir = [tA, tA.clone().negate(), tB, tB.clone().negate()][side];
+          const typeIdx = ti++ % BUILDING_TYPES.length;
+          const T = BUILDING_TYPES[typeIdx];
+          const depth = T.z1 - T.z0;
+          const push = Math.max(0, IN * PLANET_R - depth / 2 - 0.15) / PLANET_R; // verso la strada
+          const sa = side === 0 ? push : side === 1 ? -push : 0, sb = side === 2 ? push : side === 3 ? -push : 0;
+          const center = at(sa, sb);
+          const zAxis = fdir.clone().addScaledVector(center, -fdir.dot(center)).normalize();
+          const xAxis = new THREE.Vector3().crossVectors(center, zAxis).normalize();
+          const cx = (T.x0 + T.x1) / 2, cz = (T.z0 + T.z1) / 2;
+          const origin = center.clone().addScaledVector(zAxis, -cz / PLANET_R).addScaledVector(xAxis, -cx / PLANET_R).normalize();
+          placeBuilding(origin, zAxis, typeIdx, 6);
+          if (pr() < 0.5) cityProp(C + "Prop_ACUnit.gltf", at(-sa * 0.9 + (pr() - 0.5) * 0.05, -sb * 0.9 + (pr() - 0.5) * 0.05), zAxis, 1.0, 0.5);
+        } else if (b.kind === "parking") {
+          const n = 2 + Math.floor(pr() * 2);
+          for (let k = 0; k < n; k++) {
+            const da = -IN + ((k * 1.3 + 0.6) * 2 * IN) / 4, db = -IN + 0.065;
+            const d = at(da, db);
+            cityProp(C + cars[Math.floor(pr() * 3)] + ".gltf", d, tB.clone().multiplyScalar(-1).addScaledVector(tA, (pr() - 0.5) * 0.2), 4.4);
+            obstacles.push({ dir: at(da, db - 0.026), r: 1.15 / PLANET_R }, { dir: at(da, db + 0.026), r: 1.15 / PLANET_R });
+          }
+          cityProp(C + "TrafficCone_1.gltf", at(IN * 0.6, IN * 0.4), tA, 0.6);
+        } else if (b.kind === "park") {
+          if (pr() < 0.35) cityProp(C + "WaterTower.gltf", at(IN * 0.4, IN * 0.4), tA, 7.5, 1.4, "h");
+          cityProp(C + "Couch.gltf", at(-IN * 0.5, -IN * 0.55), tB, 2.2, 0.9);
+        } else if (b.kind === "lot") {
+          // lotto abbandonato: container, bancali, gomme, fusti
+          cityProp(C + (pr() < 0.5 ? "Container_Green" : "Container_Red") + ".gltf", at((pr() - 0.5) * IN, IN * 0.35), pr() < 0.5 ? tA : tB, 4.0, 1.6);
+          [["Pallet", 1.0, 0], ["Wheels_Stack", 0.6, 0.35], ["Barrel", 1.1, 0.4], ["Pallet_Broken", 1.0, 0], ["TrashBag_1", 0.6, 0.3]].forEach(([n, f, sol], k) => {
+            if (pr() < 0.3) return;
+            cityProp(C + n + ".gltf", at((pr() - 0.5) * IN * 1.5, -IN * 0.3 + (pr() - 0.5) * IN * 0.6), pr() < 0.5 ? tA : tB, f, sol, "h");
+          });
+        }
+      });
+      // incroci: lampioni sull'angolo, semafori nelle piazze centrali delle facce
+      const seen = new Set();
+      CITY_FACES.forEach((F, fi) => {
+        for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) {
+          const al = i * CITY_STEP, be = j * CITY_STEP;
+          const c = faceDir(F, al, be);
+          if (terrainHeight(c) < seaSurfaceH(c) + 0.8) continue;
+          const key = c.toArray().map((v) => v.toFixed(2)).join();
+          if (seen.has(key)) continue;
+          seen.add(key);
+          const o = CITY_AH + 0.5 / PLANET_R;
+          const sgn = (i + j + fi) % 2 ? 1 : -1;
+          const corner = faceDir(F, al + sgn * o, be + o);
+          cityProp(C + "StreetLights.gltf", corner, c.clone().sub(corner), 5.2, 0.3, "h");
+          if (i === 0 && j === 0) {
+            cityProp(C + "TrafficLight_1.gltf", faceDir(F, al - sgn * o, be - o), c.clone().sub(faceDir(F, al - sgn * o, be - o)), 4.2, 0.3, "h");
+          }
+        }
+        // auto abbandonate lungo le strade e arredo sui marciapiedi
+        for (let k = 0; k < 4; k++) {
+          const line = (Math.floor(pr() * 5) - 2) * CITY_STEP, along = (Math.floor(pr() * 4) - 1.5) * CITY_STEP + (pr() - 0.5) * 0.05;
+          const vert = pr() < 0.5, off = CITY_AH * 0.5;
+          const d = vert ? faceDir(F, line + off, along) : faceDir(F, along, line + off);
+          if (terrainHeight(d) < seaSurfaceH(d) + 0.6) continue;
+          const dirAlong = vert ? F[2] : F[1];
+          cityProp(C + cars[Math.floor(pr() * 3)] + ".gltf", d, dirAlong.clone().addScaledVector(vert ? F[1] : F[2], (pr() - 0.5) * 0.3), 4.4);
+          const t2 = dirAlong.clone().multiplyScalar(1.1 / PLANET_R);
+          obstacles.push({ dir: d.clone().add(t2).normalize(), r: 1.15 / PLANET_R }, { dir: d.clone().sub(t2).normalize(), r: 1.15 / PLANET_R });
+        }
+        for (let k = 0; k < 10; k++) {
+          const line = (Math.floor(pr() * 5) - 2) * CITY_STEP, along = (pr() - 0.5) * Math.PI / 2;
+          if (Math.abs(nearLine(along).dist) < CITY_SW + 0.02) continue;
+          const vert = pr() < 0.5, off = (CITY_AH + CITY_SW) / 2 * (pr() < 0.5 ? 1 : -1);
+          const d = vert ? faceDir(F, line + off, along) : faceDir(F, along, line + off);
+          if (terrainHeight(d) < seaSurfaceH(d) + 0.6) continue;
+          const what = ["FireHydrant", "TrashBag_2", "Prop_Bollard", "Prop_Planter_Single", "TrashBag_1"][k % 5];
+          cityProp(C + what + ".gltf", d, F[1], what === "Prop_Planter_Single" ? 1.0 : 0.75, 0.3);
+        }
+      });
+    }
+    if (CITY) buildCity();
+    else VILLAGES.forEach((vc, vi) => {
       const order = VILLAGE_ORDERS[vi % VILLAGE_ORDERS.length];
       const ta = new THREE.Vector3(1, 0, 0).addScaledVector(vc, -vc.x).normalize();
       const tb = new THREE.Vector3().crossVectors(vc, ta).normalize();
@@ -1210,7 +1494,7 @@ export default function PlanetDemo() {
     });
 
     // the rest of the town, spread over the dry land
-    const SCATTERED_BUILDING_COUNT = 12;
+    const SCATTERED_BUILDING_COUNT = CITY ? 0 : 12;
     let scatteredBuilt = 0;
     let scatterAttempts = 0;
     while (scatteredBuilt < SCATTERED_BUILDING_COUNT && scatterAttempts < 5000) {
@@ -1294,9 +1578,11 @@ export default function PlanetDemo() {
       const reach = (lenM / 2 + 2) / PLANET_R;
       ROADS.push({ pts, mid, cosReach: Math.cos(Math.min(Math.PI, reach)) });
     }
-    buildRoad(findLandSpawn(), villageCenter);
-    for (let i = 0; i + 1 < VILLAGES.length; i++) buildRoad(VILLAGES[i], VILLAGES[i + 1]);
-    VILLAGES.forEach((vc) => PLAZAS.push({ d: vc, cosIn: Math.cos(5.5 / PLANET_R), cosOut: Math.cos(7 / PLANET_R) }));
+    if (!CITY) {
+      buildRoad(findLandSpawn(), villageCenter);
+      for (let i = 0; i + 1 < VILLAGES.length; i++) buildRoad(VILLAGES[i], VILLAGES[i + 1]);
+      VILLAGES.forEach((vc) => PLAZAS.push({ d: vc, cosIn: Math.cos(5.5 / PLANET_R), cosOut: Math.cos(7 / PLANET_R) }));
+    }
     // terreno definitivo: piazzole livellate + piazze; poi riallineo al suolo cio' che era gia' appoggiato
     refreshTerrain(true);
     // sentieri: nastri che seguono il terreno, con bordi sfumati (niente piu' scalini della griglia)
@@ -2472,7 +2758,7 @@ export default function PlanetDemo() {
     const vC = new THREE.Vector3(), vF = new THREE.Vector3();
     // colori della mappa presi dalla stessa palette del terreno e del mare
     const toRGB = (c) => [Math.round(c.r * 255), Math.round(c.g * 255), Math.round(c.b * 255)];
-    const MC = { sand: toRGB(sandC), grass: toRGB(grassC.clone().lerp(new THREE.Color("#c9c27a"), 0.2)), rock: toRGB(rockC), snow: toRGB(snowC), shallow: toRGB(seaShallow), deep: toRGB(seaDeep), path: toRGB(new THREE.Color("#c8b48c")) };
+    const MC = { sand: toRGB(sandC), grass: toRGB(grassC.clone().lerp(new THREE.Color("#c9c27a"), 0.2)), rock: toRGB(rockC), snow: toRGB(snowC), shallow: toRGB(seaShallow), deep: toRGB(seaDeep), path: toRGB(new THREE.Color(BIOME.pathCore)), road: [70, 72, 76], walk: [166, 162, 154], block: [128, 124, 118] };
     const mix = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
     // proietta una direzione sulla mappa (null se fuori dal cerchio)
     function mapProject(d, limit) {
@@ -2514,7 +2800,8 @@ export default function PlanetDemo() {
           else if (h > 3.4) c = MC.rock;
           else {
             c = MC.grass;
-            if (mapBig) { const pw = pathWeight(mpD); if (pw > 0.4) c = MC.path; }
+            if (CITY) { const k = cityKindAt(mpD); c = k === "street" ? MC.road : k === "park" ? MC.grass : k === "sidewalk" || k === "plaza" ? MC.walk : MC.block; }
+            else if (mapBig) { const pw = pathWeight(mpD); if (pw > 0.4) c = MC.path; }
           }
           mapImg.data[o] = c[0]; mapImg.data[o + 1] = c[1]; mapImg.data[o + 2] = c[2]; mapImg.data[o + 3] = 255;
         }
@@ -2991,12 +3278,15 @@ export default function PlanetDemo() {
       const chosen = [];
       for (const [bi, [name, build]] of BUILDERS.entries()) {
         for (let attempt = 0; attempt < 2500; attempt++) {
-          const d = randomDir();
+          const spot = CITY && attempt === 0 ? CITY_PLACE_SPOTS[bi] : null;
+          const d = spot ? spot.clone() : randomDir();
           const h = terrainHeight(d);
-          if (h < SEA_LEVEL + 0.8 || h > 2.2) continue;
+          if (!spot && (h < SEA_LEVEL + 0.8 || h > 2.2)) continue;
+          if (!spot && CITY && cityKindAt(d) !== "lot" && cityKindAt(d) !== "park") continue;
           let ok = true;
           for (let i = 0; i < obstacles.length && ok; i++) if (d.angleTo(obstacles[i].dir) < obstacles[i].r + (attempt > 1500 ? 4 : 6) / PLANET_R) ok = false;
           for (let i = 0; i < chosen.length && ok; i++) if (d.angleTo(chosen[i].dir) < (attempt > 1200 ? 0.6 : 0.9)) ok = false;
+          if (spot) ok = true;
           if (!ok) continue;
           // solo su terreno pianeggiante: nessuna differenza di quota significativa nel cerchio
           {
@@ -3043,6 +3333,7 @@ export default function PlanetDemo() {
     refreshTerrain(true);
     resnapGround();
     buildRoadRibbons();
+    if (CITY) buildCityPlates();
 
     // ---------- Oggetti da trovare dentro le case ----------
     // Ogni mondo nasconde 3 oggetti in 3 case (le stesse per tutti i giocatori: dipendono dal codice del mondo).
