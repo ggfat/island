@@ -1706,7 +1706,7 @@ export default function PlanetDemo() {
       if (ALIEN_IN && key === "large") {
         // MENSA DELLA BASE: tavoli con sedie, casse, armadietti, generatore
         porthole(-W / 2 + 0.02, H * 0.58, -1.2, R); porthole(-W / 2 + 0.02, H * 0.58, 1.4, R); porthole(W / 2 - 0.02, H * 0.58, 0.2, -R);
-        [[-1.6, 1.0], [-1.6, -1.5]].forEach(([tx, tz]) => {
+        [[-2.15, 1.3], [-2.15, -1.2]].forEach(([tx, tz]) => {
           P("scifi/Prop_Desk_Medium.gltf", tx, tz, 0);
           P("scifi/Prop_Chair.gltf", tx - 0.8, tz + 0.95, Math.PI); P("scifi/Prop_Chair.gltf", tx + 0.8, tz + 0.95, Math.PI);
           P("scifi/Prop_Mug.gltf", tx - 0.5, tz, 0.4, 0.94, false);
@@ -1721,14 +1721,14 @@ export default function PlanetDemo() {
       } else if (ALIEN_IN && key === "small") {
         // LABORATORIO: scrivania ad angolo con terminale, scaffali, armadietto, baule
         porthole(W / 2 - 0.02, H * 0.6, 0.6, -R);
-        P("scifi/Prop_Desk_L.gltf", W / 2 - 1.15, -D / 2 + 1.15, 0);
-        P("scifi/desk_computerScreen.glb", W / 2 - 0.9, -D / 2 + 0.45, 0, 0.94, false, 0.7);
-        P("scifi/desk_computer.glb", W / 2 - 0.45, -D / 2 + 1.2, -R, 0.94, false, 0.6);
-        P("scifi/Prop_Chair.gltf", W / 2 - 1.5, -D / 2 + 1.3, 2.4);
+        P("scifi/Prop_Desk_L.gltf", W / 2 - 1.15, D / 2 - 1.15, Math.PI);
+        P("scifi/desk_computerScreen.glb", W / 2 - 0.9, D / 2 - 0.45, Math.PI, 0.94, false, 0.7);
+        P("scifi/desk_computer.glb", W / 2 - 0.45, D / 2 - 1.2, -R, 0.94, false, 0.6);
+        P("scifi/Prop_Chair.gltf", W / 2 - 1.6, D / 2 - 1.4, 0.7);
         P("scifi/Prop_Shelves_ThinShort.gltf", -W / 2 + 0.3, -0.6, R);
         P("scifi/Prop_Locker.gltf", -W / 2 + 0.3, 1.1, R);
-        P("scifi/Prop_Chest.gltf", -0.4, 1.4, Math.PI);
-        P("scifi/Prop_Barrel2_Closed.gltf", W / 2 - 0.45, 1.5, 0);
+        P("scifi/Prop_Chest.gltf", -1.0, D / 2 - 0.75, Math.PI);
+        P("scifi/Prop_Barrel2_Closed.gltf", W / 2 - 0.45, -D / 2 + 0.5, 0);
         P("scifi/Prop_HealthPack.gltf", -1.2, -D / 2 + 0.03, 0, 1.4, false);
       } else if (ALIEN_IN) {
         // PLANCIA DI COMANDO: consolle con schermi davanti a un grande oblo', armadietti, casse
@@ -1759,11 +1759,12 @@ export default function PlanetDemo() {
         col(-W / 2 + 0.5, -D * 0.12 - 0.6, 0.8); col(-W / 2 + 0.5, -D * 0.12 + 0.6, 0.8);
         P("Cauldron", -W / 2 + 1.35, -D * 0.12, 0);
         // due tavoloni con panche
-        [[-1.0, 1.6], [-1.2, -1.6]].forEach(([tx, tz]) => {
-          P("Table_Large", tx, tz, 0);
-          P("Bench", tx, tz - 0.95, 0); P("Bench", tx, tz + 0.95, Math.PI);
+        // tavoloni messi per lungo, lontani dalla porta: dall'ingresso si cammina dritti nella sala
+        [[-2.1, 1.3], [0.9, 1.3]].forEach(([tx, tz]) => {
+          P("Table_Large", tx, tz, R);
+          P("Bench", tx - 0.95, tz, R); P("Bench", tx + 0.95, tz, -R);
         });
-        P("Chandelier", -1.1, 0, 0, H);
+        P("Chandelier", -0.6, 1.3, 0, H);
         // parete di fondo: mensola con bottiglie, lanterne, stendardo
         P("Shelf_Simple", -2.6, -D / 2 + 0.02, 0, 1.75, false);
         P("SmallBottles_1", -2.8, -D / 2 + 0.2, 0, 1.78, false);
@@ -1775,24 +1776,24 @@ export default function PlanetDemo() {
         [-1, 1].forEach((sd) => box(0.06, 0.9, 0.9, winM, sd * (W / 2 - 0.02), H * 0.62, -D * 0.1));
         cyl(1.0, 0.03, rBlue, -0.3, 0.02, 0.6, 20);
         P("Bookcase_2", -W / 2 + 0.25, -1.0, R); P("Bookcase_2", -W / 2 + 0.25, 0.6, R);
-        P("Bed_Twin1", W / 2 - 1.0, -D / 2 + 1.25, 0);
-        P("Chest_Wood", W / 2 - 1.0, 0.75, Math.PI);
-        P("Scroll_1", W / 2 - 1.1, 0.75, 0.4, 0.72, false);
-        P("Nightstand_Shelf", 0.75, -D / 2 + 0.3, 0);
-        P("CandleStick_Triple", 0.75, -D / 2 + 0.3, 0, 1.22, false);
-        P("BookStand", -0.6, 1.2, Math.PI * 0.8);
-        P("Chair_1", 0.4, 1.4, -2.3);
-        P("Book_Stack_1", -1.4, 1.75, 0.5);
-        P("Shelf_Small_Bottles", W / 2 - 0.02, 1.4, -R, 1.3, false);
+        P("Bed_Twin1", W / 2 - 0.97, D / 2 - 1.22, Math.PI);
+        P("Nightstand_Shelf", W / 2 - 0.2, -0.3, -R);
+        P("CandleStick_Triple", W / 2 - 0.2, -0.3, 0, 1.22, false);
+        P("Chest_Wood", W / 2 - 0.75, -D / 2 + 0.6, 0);
+        P("Scroll_1", W / 2 - 0.85, -D / 2 + 0.6, 0.4, 0.55, false);
+        P("BookStand", -1.2, 1.4, Math.PI * 0.8);
+        P("Chair_1", -0.3, 1.6, -2.3);
+        P("Book_Stack_1", -1.9, 1.85, 0.5);
+        P("Shelf_Small_Bottles", -1.2, -D / 2 + 0.02, 0, 1.3, false);
       } else {
         // CABINA DEL CAPITANO: oblo', tavolo con carta, letto, timone, barili e bauli
         [-1, 1].forEach((sd) => [-1.3, 0.9].forEach((z) => { const o = cyl(0.42, 0.08, rGold, sd * (W / 2 - 0.02), H * 0.6, z, 16); o.rotation.z = Math.PI / 2; const o2 = cyl(0.34, 0.1, winM, sd * (W / 2 - 0.03), H * 0.6, z, 16); o2.rotation.z = Math.PI / 2; }));
         box(2.4, 0.03, 1.6, rNavy, 0.4, 0.02, 1.6);
-        P("Table_Large", 0.4, 0.4, 0);
-        box(1.3, 0.02, 0.8, rMap, 0.4, 0.82, 0.4);
-        P("Scroll_2", 1.3, 0.3, 0.3, 0.81, false); P("CandleStick_Triple", -0.6, 0.5, 0, 0.81, false);
-        P("Chair_1", -0.2, -0.45, 0); P("Chair_1", 1.0, 1.25, Math.PI);
-        P("Bed_Twin2", -W / 2 + 1.25, 1.4, R);
+        P("Table_Large", 0.6, 1.35, 0);
+        box(1.3, 0.02, 0.8, rMap, 0.6, 0.82, 1.35);
+        P("Scroll_2", 1.5, 1.25, 0.3, 0.81, false); P("CandleStick_Triple", -0.4, 1.45, 0, 0.81, false);
+        P("Chair_1", 0.0, 0.5, 0); P("Chair_1", 1.2, 2.2, Math.PI);
+        P("Bed_Twin2", -W / 2 + 1.25, 1.55, R);
         // timone al muro destro (procedurale)
         const wheel = add(new THREE.TorusGeometry(0.55, 0.07, 8, 16), rWood, W / 2 - 0.2, 1.7, -D * 0.2);
         wheel.rotation.y = Math.PI / 2;
@@ -1810,11 +1811,14 @@ export default function PlanetDemo() {
       scene.add(g);
       rooms[key] = { key, group: g, W, D, H, colliders };
     });
+    // Gli arredi hanno misure "umane" (tavolo alto 0,8 m): dentro casa i personaggi tornano alla loro
+    // taglia originale, altrimenti sembrano giganti in una casa delle bambole.
+    const IN_SCALE = 0.7;
     function roomFree(room, x, z) {
-      if (Math.abs(x) > room.W / 2 - 0.45 || z < -room.D / 2 + 0.35 || z > room.D / 2 - 0.45) return false;
+      if (Math.abs(x) > room.W / 2 - 0.35 || z < -room.D / 2 + 0.3 || z > room.D / 2 - 0.35) return false;
       for (let i = 0; i < room.colliders.length; i++) {
         const c = room.colliders[i];
-        if (Math.hypot(x - c.x, z - c.z) < c.r + 0.3) return false;
+        if (Math.hypot(x - c.x, z - c.z) < c.r + 0.22) return false;
       }
       return true;
     }
@@ -2617,9 +2621,11 @@ export default function PlanetDemo() {
           r.ip.lerp(r.ipT, 1 - Math.exp(-dt * 10));
           tmpPos.set(r.ip.x, r.jump, r.ip.z);
           r.root.position.copy(tmpPos);
+          r.root.scale.setScalar(IN_SCALE);
           r.root.up.set(0, 1, 0);
           r.root.lookAt(tmpPos.x + Math.sin(r.rh), tmpPos.y, tmpPos.z + Math.cos(r.rh));
         } else {
+          r.root.scale.setScalar(1);
           r.root.visible = !inside;
           if (inside) return;
           const gr = groundRadiusAt(r.curDir);
@@ -2922,6 +2928,12 @@ export default function PlanetDemo() {
     };
     if (TEST_PARTNER) window.__hideMe = (h) => { character.visible = !h; remotes.forEach((r) => (r.root.visible = !h)); };
     if (TEST_PARTNER) window.__placeAct = (v) => { window.__forceAct = v; };
+    if (TEST_PARTNER) window.__roomCheck = () => Object.entries(rooms).map(([k, r]) => {
+      const sx = 0, sz = -r.D / 2 + 1.4;
+      const bad = [];
+      for (let z = -r.D / 2 + 0.5; z < r.D / 2 - 0.6; z += 0.2) if (!roomFree(r, 0, z)) bad.push(+z.toFixed(1));
+      return { k, spawnFree: roomFree(r, sx, sz), bloccatoLungoX0: bad.slice(0, 6) };
+    });
     if (TEST_PARTNER) window.__pitch = (v) => { camPitch = v; };
     if (TEST_PARTNER) window.__tpSea = (i, k = 0, back = 4) => {
       const c = SEA_CENTERS[i % SEA_CENTERS.length];
@@ -3171,7 +3183,7 @@ export default function PlanetDemo() {
           const mag = Math.min(1, mlen);
           const nx = mx / Math.max(mlen, 1);
           const nz = my / Math.max(mlen, 1); // the room camera looks toward -Z, so stick up = -Z
-          const step = 4.2 * dt * mag;
+          const step = 3.2 * dt * mag;
           const px = inPos.x + nx * step;
           const pz = inPos.z + nz * step;
           if (roomFree(room, px, pz)) {
@@ -3212,7 +3224,7 @@ export default function PlanetDemo() {
         lastMoving = moving;
         updateRemotes(dt);
         sendNet(dt);
-        character.scale.set(1, 1, 1);
+        character.scale.setScalar(IN_SCALE);
 
         // fixed cutaway camera, distance adapted to the screen shape so the whole room always fits
         const tanV = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));

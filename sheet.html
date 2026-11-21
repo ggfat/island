@@ -1,0 +1,6 @@
+<!doctype html><html><body><script type="module">
+import * as THREE from "three";import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+const names=location.hash.slice(1).split(",");const L=new GLTFLoader();const out=[];
+for(const p of names){const g=await new Promise(res=>L.load(p,res,undefined,()=>res(null)));if(!g){out.push(p+' ERR');continue;}
+ const bb=new THREE.Box3().setFromObject(g.scene);const sz=bb.getSize(new THREE.Vector3());out.push(`${p.split('/').pop()} w${sz.x.toFixed(2)} h${sz.y.toFixed(2)} d${sz.z.toFixed(2)}`);}
+window.out=out;window.done=1;</script></body></html>
