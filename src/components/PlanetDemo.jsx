@@ -124,12 +124,49 @@ function mulberry32(a) {
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
-// ---------- Biomi: il primo carattere del codice del mondo decide il tipo di pianeta ----------
-const BIOME_LIST = ["temperate", "alien"];
-function biomeOf(code) {
-  if (!code) return "temperate";
-  const i = WORLD_ALPHABET.indexOf(code[0]);
-  return i < 0 ? "temperate" : BIOME_LIST[i % BIOME_LIST.length];
+// ---------- Livelli: ogni livello e' un bioma. Si passa al successivo completando le missioni del corrente ----------
+const BIOME_LIST = ["temperate", "alien"]; // ordine dei livelli
+const BIOME_SLUG = { temperate: "temperato", alien: "alieno" }; // nome del bioma nel link (?bioma=)
+const BIOME_TITLE = { temperate: "Isola temperata", alien: "Pianeta alieno" };
+function slugToBiome(v) {
+  if (!v) return null;
+  v = String(v).toLowerCase();
+  return BIOME_LIST.find((b) => b === v || BIOME_SLUG[b] === v) || null;
+}
+// Missioni di un livello: 6 luoghi da attivare in coppia + 3 oggetti da trovare dentro le case
+const QUEST_ITEMS = {
+  temperate: [
+    { id: "mappa", name: "Mappa nautica", path: "/models/props/Scroll_2.gltf" },
+    { id: "corda", name: "Corda", path: "/models/props/Rope_1.gltf" },
+    { id: "lanterna", name: "Lanterna", path: "/models/props/Lantern_Wall.gltf" },
+  ],
+  alien: [
+    { id: "kit", name: "Kit di riparazione", path: "/models/scifi/Prop_HealthPack.gltf" },
+    { id: "cristallo", name: "Cristallo di energia", path: "/models/space/rock_crystals.glb" },
+    { id: "batteria", name: "Batteria", path: "/models/scifi/machine_barrel.glb" },
+  ],
+};
+const PLACES_PER_LEVEL = 6;
+const missionsPerLevel = (b) => PLACES_PER_LEVEL + (QUEST_ITEMS[b] || []).length;
+const PROGRESS_KEY = "island_progress";
+// progressi del giocatore: { done: { temperate: ["p:Fucina", "o:mappa", ...], alien: [...] } } (nel browser)
+function loadProgress(get) {
+  let p = null;
+  try { p = JSON.parse(get(PROGRESS_KEY) || "null"); } catch { p = null; }
+  if (!p || typeof p !== "object") p = {};
+  p.done = p.done && typeof p.done === "object" ? p.done : {};
+  if (!p.migrated) {
+    // vecchio formato: elenco dei luoghi completati (erano solo nel mondo temperato)
+    try { const old = JSON.parse(get("island_missions") || "[]"); if (old.length) p.done.temperate = [...new Set([...(p.done.temperate || []), ...old.map((n) => "p:" + n)])]; } catch { /* ignora */ }
+    p.migrated = true;
+  }
+  return p;
+}
+// livello = 1 + livelli completati di fila dall'inizio (non si salta nessun livello)
+function levelOf(p) {
+  let l = 1;
+  for (const b of BIOME_LIST) { if ((p.done[b] || []).length >= missionsPerLevel(b)) l++; else break; }
+  return l; // puo' superare BIOME_LIST.length: vuol dire che hai finito tutti i livelli esistenti
 }
 const SP = (n) => `/models/space/${n}.gltf`;
 const BIOMES = {
@@ -289,16 +326,18 @@ export default function PlanetDemo() {
     const wcParams = new URLSearchParams(location.search);
     const wcUrlRoom = (wcParams.get("room") || "").toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 12) || null;
     const wcTest = wcParams.has("test");
-    let wcMissions = 0;
-    try { wcMissions = JSON.parse(wcGet("island_missions") || "[]").length; } catch { /* ignora */ }
-    const wcCanCreate = wcGet("island_role") !== "guest" || wcMissions >= 6;
+    const wcLevel = levelOf(loadProgress(wcGet));
+    const wcCanCreate = wcGet("island_role") !== "guest" || wcLevel >= 2;
     const wcNewCode = () => Array.from(crypto.getRandomValues(new Uint8Array(8)), (b) => WORLD_ALPHABET[b % WORLD_ALPHABET.length]).join("");
-    // ?biome=alieno: chi crea un mondo nuovo sceglie il pianeta alieno (in test vale anche da solo)
-    const wcWantAlien = wcParams.get("biome") === "alieno";
-    const wcCodeFor = (biome) => { for (let i = 0; i < 200; i++) { const c = wcNewCode(); if (biomeOf(c) === biome) return c; } return wcNewCode(); };
-    const wcSaved = wcTest || wcWantAlien ? null : wcGet("island_myroom");
-    const worldCode = wcUrlRoom || wcSaved || (!wcTest && wcCanCreate ? wcCodeFor(wcWantAlien ? "alien" : "temperate") : null);
-    const biomeKey = !worldCode && wcTest && wcWantAlien ? "alien" : biomeOf(worldCode);
+    // Bioma: chi entra con un link usa quello del link (?bioma=), chi torna nel suo mondo quello salvato,
+    // chi crea un mondo nuovo quello del proprio livello (non si possono saltare livelli).
+    const wcBiomeParam = slugToBiome(wcParams.get("bioma") || wcParams.get("biome"));
+    const wcSaved = wcTest ? null : wcGet("island_myroom");
+    const worldCode = wcUrlRoom || wcSaved || (!wcTest && wcCanCreate ? wcNewCode() : null);
+    const levelBiome = BIOME_LIST[Math.min(wcLevel, BIOME_LIST.length) - 1];
+    const biomeKey = wcUrlRoom || wcTest ? wcBiomeParam || "temperate"
+      : wcSaved ? slugToBiome(wcGet("island_myroom_biome")) || "temperate"
+      : levelBiome;
     configureWorld(worldCode, biomeKey);
     const BIOME = BIOMES[biomeKey];
 
@@ -2140,20 +2179,27 @@ export default function PlanetDemo() {
     const urlParams = new URLSearchParams(location.search);
     const isTestMode = urlParams.has("test");
     const urlRoom = (urlParams.get("room") || "").toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 12) || null;
-    const TOTAL_MISSIONS = 6;
-    let missionsDone = new Set();
-    if (!isTestMode) { try { missionsDone = new Set(JSON.parse(store.get("island_missions") || "[]")); } catch { /* ignora */ } }
+    const progress = isTestMode ? { done: {} } : loadProgress((k) => store.get(k));
+    const TOTAL_MISSIONS = missionsPerLevel(biomeKey);
+    const doneList = () => (progress.done[biomeKey] = progress.done[biomeKey] || []);
+    const isDone = (id) => doneList().includes(id);
+    function markDone(id) {
+      if (isDone(id)) return false;
+      doneList().push(id);
+      if (!isTestMode) store.set(PROGRESS_KEY, JSON.stringify(progress));
+      return true;
+    }
     let role = store.get("island_role"); // "host" (ha creato un mondo) | "guest" (invitato)
     let myRoom = store.get("island_myroom");
     let roomName = null, roomCap = 6;
     let curMode = "join", curCode = null, curHost = false;
-    const canCreate = () => role !== "guest" || missionsDone.size >= TOTAL_MISSIONS;
+    const canCreate = () => role !== "guest" || levelOf(progress) >= 2;
     function computeEntry() {
       if (isTestMode && !urlRoom) return { mode: "solo", label: "ENTRA (TEST)", msg: "Modalita' test: gioco da solo con un compagno simulato." };
       if (urlRoom) return { mode: "join", code: urlRoom, host: urlRoom === myRoom, label: "ENTRA NEL MONDO", msg: urlRoom === "test" ? "Stanza di sviluppo." : "Sei stato invitato in un mondo." };
       if (myRoom) return { mode: "join", code: myRoom, host: true, label: "TORNA NEL TUO MONDO", msg: "Il tuo mondo ti aspetta." };
       if (canCreate()) return { mode: "create", code: worldCode, label: "CREA IL TUO MONDO", msg: "Crea un mondo tutto tuo e invita chi vuoi." };
-      return { mode: "solo", label: "ESPLORA DA SOLO", msg: "Per creare il tuo mondo serve un invito: completa tutte le missioni nel mondo di chi ti ha invitato." };
+      return { mode: "solo", label: "ESPLORA DA SOLO", msg: "Per creare il tuo mondo completa il livello 1 nel mondo di chi ti ha invitato." };
     }
     let entry = computeEntry();
 
@@ -2561,10 +2607,10 @@ export default function PlanetDemo() {
         if (typeof m.c === "number" && m.c !== myChar) toast("Il personaggio scelto era gia' in uso: sei " + CHAR_NAMES[m.c % CHAR_NAMES.length]);
         if (typeof m.c === "number" && m.c !== localCharIdx) { localCharIdx = m.c; getChar(m.c).then((g) => setLocalChar(g, m.c)); }
         roomName = m.room; curCode = m.room; curMode = "join"; roomCap = m.cap || 6;
-        if (m.host) { curHost = true; role = role || "host"; store.set("island_role", role); store.set("island_myroom", m.room); myRoom = m.room; }
+        if (m.host) { curHost = true; role = role || "host"; store.set("island_role", role); store.set("island_myroom", m.room); store.set("island_myroom_biome", BIOME_SLUG[biomeKey]); myRoom = m.room; }
         else if (!role) { role = "guest"; store.set("island_role", "guest"); }
         entry = { mode: "join", code: m.room, host: !!m.host, label: m.host ? "TORNA NEL TUO MONDO" : "TORNA NEL MONDO", msg: "" };
-        if (m.room !== "test") history.replaceState(null, "", location.pathname + "?room=" + m.room + (isTestMode ? "&test=1" : ""));
+        if (m.room !== "test") history.replaceState(null, "", location.pathname + "?room=" + m.room + "&bioma=" + BIOME_SLUG[biomeKey] + (isTestMode ? "&test=1" : ""));
         // evita di spawnare sopra un altro giocatore: ognuno parte in un punto leggermente diverso
         if (m.id > 1 && !inside) {
           const ang = m.id * 1.0;
@@ -2732,6 +2778,8 @@ export default function PlanetDemo() {
     function inviteLink() {
       const u = new URL(location.href);
       u.searchParams.set("room", curCode);
+      u.searchParams.set("bioma", BIOME_SLUG[biomeKey]); // chi entra deve vedere lo stesso pianeta
+      u.searchParams.delete("biome");
       u.searchParams.delete("test");
       return u.toString();
     }
@@ -2775,30 +2823,47 @@ export default function PlanetDemo() {
     mount.appendChild(missionsEl);
     missionsEl.addEventListener("pointerdown", (e) => { e.stopPropagation(); missionsEl.style.display = "none"; });
     function showMissions() {
-      const rows = places.map((pl) => '<div>' + (missionsDone.has(pl.name) ? "\u2705" : "\u2B1C") + " " + pl.name + "</div>").join("");
-      const done = missionsDone.size;
-      missionsEl.innerHTML = '<div style="background:#fff;color:#223;max-width:340px;margin:16px;padding:20px 22px;border-radius:18px;font:14px/1.7 system-ui,sans-serif;box-shadow:0 8px 30px rgba(0,0,0,.4)">' +
+      const mark = (id) => (isDone(id) ? "\u2705" : "\u2B1C");
+      const rows = places.map((pl) => "<div>" + mark("p:" + pl.name) + " " + pl.name + "</div>").join("");
+      const itemRows = (QUEST_ITEMS[biomeKey] || []).map((it) => "<div>" + mark("o:" + it.id) + " " + it.name + "</div>").join("");
+      const done = doneList().length;
+      const lvIdx = BIOME_LIST.indexOf(biomeKey) + 1;
+      const myLv = levelOf(progress);
+      const next = BIOME_LIST[lvIdx];
+      const foot = done < TOTAL_MISSIONS
+        ? (next ? "Completale tutte per sbloccare il livello " + (lvIdx + 1) + ": " + BIOME_TITLE[next] + "." : "Completale tutte per finire il gioco (per ora).")
+        : next ? (myLv > lvIdx ? "Livello completato! Crea il livello " + (lvIdx + 1) + " da \u2630 \u2192 Crea un nuovo mondo." : "Completato. Per avanzare completa prima il livello " + myLv + ".")
+        : "Hai completato tutti i livelli disponibili!";
+      missionsEl.innerHTML = '<div style="background:#fff;color:#223;max-width:340px;margin:16px;padding:20px 22px;border-radius:18px;font:14px/1.6 system-ui,sans-serif;box-shadow:0 8px 30px rgba(0,0,0,.4)">' +
+        '<div style="font-size:13px;opacity:.7">Livello ' + lvIdx + " \u00b7 " + BIOME_TITLE[biomeKey] + (myLv !== lvIdx ? " \u00b7 il tuo livello: " + Math.min(myLv, BIOME_LIST.length) : "") + "</div>" +
         '<div style="font-size:19px;font-weight:700;margin-bottom:6px">Missioni ' + done + "/" + TOTAL_MISSIONS + "</div>" +
-        '<div style="margin-bottom:8px;opacity:.8">Attiva ogni luogo speciale insieme a un\'altra persona. Un luogo attivato resta attivo.</div>' + rows +
-        '<div style="margin-top:10px;font-weight:600">' + (done >= TOTAL_MISSIONS ? "Hai completato tutto: puoi creare il tuo mondo da \u2630." : "Completale tutte per poter creare il tuo mondo.") + "</div>" +
+        '<div style="font-weight:600">Luoghi speciali</div><div style="margin-bottom:4px;opacity:.75;font-size:13px">Attivali insieme a un\'altra persona: restano attivi.</div>' + rows +
+        '<div style="font-weight:600;margin-top:8px">Oggetti da trovare</div><div style="margin-bottom:4px;opacity:.75;font-size:13px">Sono dentro le case con le scintille \u2728 sul tetto.</div>' + itemRows +
+        '<div style="margin-top:10px;font-weight:600">' + foot + "</div>" +
         '<div style="margin-top:12px;text-align:center"><span style="display:inline-block;padding:9px 30px;border-radius:22px;background:#2c4a52;color:#fff;font-weight:700;cursor:pointer">Chiudi</span></div></div>';
       missionsEl.style.display = "flex";
     }
-    function completeMission(pl) {
-      missionsDone.add(pl.name);
-      if (!isTestMode) store.set("island_missions", JSON.stringify([...missionsDone]));
-      const k = missionsDone.size;
-      toast(k >= TOTAL_MISSIONS ? "\u{1F389} Tutte le missioni completate! Ora puoi creare il tuo mondo da \u2630." : "\u2705 Missione completata: " + pl.name + " (" + k + "/" + TOTAL_MISSIONS + ")", 6000);
+    function completeGoal(id, label, icon) {
+      const lvBefore = levelOf(progress);
+      if (!markDone(id)) return;
+      const k = doneList().length;
+      const lvAfter = levelOf(progress);
+      if (lvAfter > lvBefore) {
+        const nb = BIOME_LIST[lvAfter - 1];
+        toast(nb ? "\u{1F389} Livello " + (lvAfter - 1) + " completato! Hai sbloccato il livello " + lvAfter + ": " + BIOME_TITLE[nb] + ". Crealo da \u2630 \u2192 Crea un nuovo mondo." : "\u{1F389} Hai completato tutti i livelli disponibili!", 9000);
+      } else if (k >= TOTAL_MISSIONS) toast("\u{1F389} Tutte le missioni di questo mondo completate!", 6000);
+      else toast(icon + " " + label + " (" + k + "/" + TOTAL_MISSIONS + ")", 6000);
     }
+    function completeMission(pl) { completeGoal("p:" + pl.name, "Missione completata: " + pl.name, "\u2705"); }
     menuItem("❓ Aiuto", showHelp);
     menuItem("\u{1F517} Invita amici", invite);
     menuItem("\u{1F3AF} Missioni", showMissions);
     menuItem("\u{1F30D} Crea un nuovo mondo", () => {
-      if (!canCreate()) { toast("Completa tutte le missioni per creare il tuo mondo (" + missionsDone.size + "/" + TOTAL_MISSIONS + ")."); return; }
+      if (!canCreate()) { toast("Completa il livello 1 per creare il tuo mondo (" + doneList().length + "/" + TOTAL_MISSIONS + ")."); return; }
       if (!window.confirm("Creare un nuovo mondo? Quello attuale resta raggiungibile solo con il suo link.")) return;
       store.del("island_myroom");
-      // livello successivo: completate le missioni, il nuovo mondo e' un pianeta alieno
-      location.href = location.pathname + (missionsDone.size >= TOTAL_MISSIONS ? "?biome=alieno" : "");
+      // il nuovo mondo e' sempre del tuo livello piu' alto (lo decide la schermata iniziale)
+      location.href = location.pathname;
     });
     menuItem("\u{1F504} Riconnetti", () => {
       if (net.connected) { toast("Sei gia' online"); return; }
@@ -2909,7 +2974,80 @@ export default function PlanetDemo() {
     refreshTerrain(true);
     resnapGround();
     buildRoadRibbons();
-    if (TEST_PARTNER) window.__info = () => ({ villages: VILLAGES.length, buildings: buildings.length, trees: decor.tree.length, places: places.length });
+
+    // ---------- Oggetti da trovare dentro le case ----------
+    // Ogni mondo nasconde 3 oggetti in 3 case (le stesse per tutti i giocatori: dipendono dal codice del mondo).
+    // Le case con un oggetto che non hai ancora trovato hanno scintille dorate sopra il tetto.
+    const questItems = [];
+    const itemByBuilding = new Map();
+    {
+      const defs = QUEST_ITEMS[biomeKey] || [];
+      const ir = mulberry32(hashStr((worldCode || "legacy") + "items"));
+      const pool = buildings.map((_, i) => i);
+      const sparkGeo = new THREE.OctahedronGeometry(0.32, 0);
+      const sparkMat = new THREE.MeshBasicMaterial({ color: "#ffd35c", fog: false });
+      const haloMat = new THREE.MeshBasicMaterial({ color: "#ffe9a0", transparent: true, opacity: 0.35, depthWrite: false, fog: false });
+      defs.forEach((def) => {
+        if (!pool.length) return;
+        const bi = pool.splice(Math.floor(ir() * pool.length), 1)[0];
+        const b = buildings[bi];
+        const mark = new THREE.Group();
+        const gem = new THREE.Mesh(sparkGeo, sparkMat);
+        const halo = new THREE.Mesh(new THREE.SphereGeometry(0.75, 12, 8), haloMat);
+        mark.add(gem, halo);
+        mark.position.copy(b.g.localToWorld(new THREE.Vector3((b.T.x0 + b.T.x1) / 2, b.T.h + 1.3, (b.T.z0 + b.T.z1) / 2)));
+        scene.add(mark);
+        const it = { ...def, bi, mark, gem, holder: null };
+        mark.visible = !isDone("o:" + it.id);
+        questItems.push(it);
+        itemByBuilding.set(bi, it);
+      });
+    }
+    function updateQuestMarks(t) {
+      for (const it of questItems) {
+        if (!it.mark.visible) continue;
+        it.gem.rotation.y = t * 1.6;
+        it.gem.position.y = Math.sin(t * 2.2 + it.bi) * 0.18;
+      }
+    }
+    // dentro la casa: l'oggetto appare in un angolo libero, lontano dalla porta
+    function placeQuestItem(b) {
+      const it = itemByBuilding.get(buildings.indexOf(b));
+      if (!it || isDone("o:" + it.id)) return null;
+      const room = rooms[b.roomKey];
+      const W = room.W, D = room.D;
+      const spots = [[W / 2 - 0.9, D / 2 - 0.8], [-W / 2 + 0.9, D / 2 - 0.8], [0, D / 2 - 0.7], [W / 2 - 0.8, 0.2], [-W / 2 + 0.8, 0.2]].filter(([x, z]) => roomFree(room, x, z));
+      const [x, z] = spots.length ? spots[it.bi % spots.length] : [0, D / 2 - 0.7];
+      const holder = new THREE.Group();
+      holder.position.set(x, 0, z);
+      const ring = new THREE.Mesh(new THREE.RingGeometry(0.32, 0.46, 24), new THREE.MeshBasicMaterial({ color: "#ffd35c", transparent: true, opacity: 0.75, side: THREE.DoubleSide, depthWrite: false }));
+      ring.rotation.x = -Math.PI / 2; ring.position.y = 0.03;
+      const glowBall = new THREE.Mesh(new THREE.SphereGeometry(0.5, 14, 10), new THREE.MeshBasicMaterial({ color: "#ffe9a0", transparent: true, opacity: 0.22, depthWrite: false }));
+      glowBall.position.y = 0.4;
+      const spin = new THREE.Group();
+      holder.add(ring, glowBall, spin);
+      loadToon(it.path).then((src) => {
+        if (!src || !holder.parent) return;
+        const m = src.clone();
+        const bb = new THREE.Box3().setFromObject(m);
+        const k = 0.5 / Math.max(0.01, bb.max.x - bb.min.x, bb.max.y - bb.min.y, bb.max.z - bb.min.z);
+        m.scale.multiplyScalar(k);
+        m.position.set(-((bb.min.x + bb.max.x) / 2) * k, -bb.min.y * k + 0.15, -((bb.min.z + bb.max.z) / 2) * k);
+        spin.add(m);
+      });
+      room.group.add(holder);
+      return { it, holder, spin, x, z };
+    }
+    function collectQuestItem(q) {
+      q.holder.parent && q.holder.parent.remove(q.holder);
+      q.it.mark.visible = false;
+      audio.place();
+      completeGoal("o:" + q.it.id, "Hai trovato: " + q.it.name, "\u{1F50E}");
+    }
+    if (TEST_PARTNER) window.__info = () => ({ villages: VILLAGES.length, buildings: buildings.length, trees: decor.tree.length, places: places.length, items: questItems.length, biome: biomeKey });
+    if (TEST_PARTNER) window.__enterItem = (i) => { const it = questItems[i]; if (it) enterBuilding(buildings[it.bi]); return it ? { name: it.name, spot: inside && inside.quest ? [inside.quest.x, inside.quest.z] : null } : null; };
+    if (TEST_PARTNER) window.__walkTo = (x, z) => { inPos.set(x, 0, z); };
+    if (TEST_PARTNER) window.__progress = () => ({ done: doneList(), level: levelOf(progress) });
     // test: mi porto sulla riva del mare i, guardando verso il largo (k = direzione di uscita)
     if (TEST_PARTNER) window.__q = () => ({ level: quality.level, mode: quality.mode, n: quality.frameTimes.length, cd: quality.cooldown, hidden: document.hidden });
     if (TEST_PARTNER) window.__enter = (key) => { const b = buildings.find((x) => x.roomKey === key); if (b) enterBuilding(b); return !!b; };
@@ -2988,12 +3126,12 @@ export default function PlanetDemo() {
         const on = pl.locked;
         pl.act += ((on ? 1 : 0) - pl.act) * Math.min(1, dt * 2.5);
         const here = !inside && charDir.angleTo(pl.dir) < r2;
-        if (here && on && pl.act > 0.5 && !missionsDone.has(pl.name)) completeMission(pl);
+        if (here && on && pl.act > 0.5 && !isDone("p:" + pl.name)) completeMission(pl);
         placeNearFlag = !inside && charDir.angleTo(pl.dir) * PLANET_R < 22;
         pl.ring.material.opacity = 0.3 + 0.5 * pl.act + (n === 1 ? 0.15 * Math.sin(t * 5) : 0);
         pl.ring.material.color.set("#ffd35c").lerp(new THREE.Color("#ffffff"), pl.act);
         pl.upd(TEST_PARTNER && window.__forceAct !== undefined ? window.__forceAct : pl.act, t, dt);
-        if (!inside && charDir.angleTo(pl.dir) < r2 * 1.6) hint = on ? "✨ " + pl.name + " — " + (missionsDone.has(pl.name) ? "missione completata ✅" : "attivo!") : "✨ " + pl.name + " — serve qualcun altro qui con te";
+        if (!inside && charDir.angleTo(pl.dir) < r2 * 1.6) hint = on ? "✨ " + pl.name + " — " + (isDone("p:" + pl.name) ? "missione completata ✅" : "attivo!") : "✨ " + pl.name + " — serve qualcun altro qui con te";
       }
       let nearest = null, nearAng = 9;
       for (const pl of places) {
@@ -3062,7 +3200,7 @@ export default function PlanetDemo() {
       const centerDir = b.pos.clone().normalize();
       const out = b.exitDir.clone().sub(centerDir);
       out.addScaledVector(b.exitDir, -out.dot(b.exitDir)).normalize();
-      inside = { room, returnDir: b.exitDir.clone(), returnFacing: out, bIdx: buildings.indexOf(b) };
+      inside = { room, returnDir: b.exitDir.clone(), returnFacing: out, bIdx: buildings.indexOf(b), quest: placeQuestItem(b) };
       audio.enter();
       inPos.set(0, 0, -room.D / 2 + 1.4);
       inHeading.set(0, 0, 1);
@@ -3079,6 +3217,7 @@ export default function PlanetDemo() {
       flash();
     }
     function exitBuilding() {
+      if (inside.quest && inside.quest.holder.parent) inside.quest.holder.parent.remove(inside.quest.holder);
       charDir = inside.returnDir.clone();
       facing.copy(inside.returnFacing);
       charFacing.copy(inside.returnFacing);
@@ -3119,6 +3258,7 @@ export default function PlanetDemo() {
       hemi.color.set("#98a6d6").lerp(dayColorTmp.set("#dfe8e6"), dayFactor);
       skyMat.color.set("#6f80ae").lerp(dayColorTmp.set("#ffffff"), dayFactor).lerp(duskColorTmp.set("#ffb27a"), duskFactor * 0.45);
       scene.fog.color.copy(skyMat.color).multiply(fogTintC);
+      updateQuestMarks(t);
       for (let i = 0; i < nightGlow.length; i++) { const ng = nightGlow[i]; ng.mat.emissiveIntensity = ng.day + (ng.night - ng.day) * (1 - dayFactor); }
       if (alienSky) alienSky.update(dayFactor, t);
 
@@ -3242,6 +3382,12 @@ export default function PlanetDemo() {
         camera.up.set(0, 1, 0);
         camera.lookAt(target);
 
+        const qi = inside.quest;
+        if (qi && qi.holder.parent) {
+          qi.spin.rotation.y += dt * 1.5;
+          qi.spin.position.y = Math.sin(t * 3) * 0.06;
+          if (Math.hypot(inPos.x - qi.x, inPos.z - qi.z) < 0.75) collectQuestItem(qi);
+        }
         const nearExit = Math.abs(inPos.x) < 1.4 && inPos.z < -room.D / 2 + 1.9;
         setAction(nearExit ? "ESCI" : null);
         if (actionRequested && nearExit) exitBuilding();

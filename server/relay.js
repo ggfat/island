@@ -2,7 +2,7 @@
 // Ogni "mondo" e' una stanza con codice casuale: la crea chi entra senza link, gli altri entrano con il link.
 // Avvio:  node server/relay.js            (produzione: la stanza "test" e' spenta)
 //         node server/relay.js --dev      (sviluppo: stanza "test" attiva, fino a 50 giocatori)
-// Variabili: PORT (8787), ROOM_CAP (7), ALLOWED_ORIGIN, MAX_ROOMS (300)
+// Variabili: PORT (8787), ROOM_CAP (6), ALLOWED_ORIGIN, MAX_ROOMS (300)
 import { createServer } from "node:http";
 import { WebSocketServer } from "ws";
 import { randomBytes } from "node:crypto";
@@ -12,8 +12,8 @@ import { fileURLToPath } from "node:url";
 
 const PORT = Number(process.env.PORT) || 8787;
 const DEV = process.argv.includes("--dev") || process.env.ALLOW_TEST_ROOM === "1";
-const HARD_CAP = 7; // un personaggio diverso per ogni giocatore
-const ROOM_CAP = Math.min(HARD_CAP, Math.max(2, Number(process.env.ROOM_CAP) || 7));
+const HARD_CAP = 6; // un personaggio diverso per ogni giocatore (6 per bioma)
+const ROOM_CAP = Math.min(HARD_CAP, Math.max(2, Number(process.env.ROOM_CAP) || 6));
 const TEST_CAP = 50;
 const MAX_ROOMS = Number(process.env.MAX_ROOMS) || 300;
 const TICK_MS = 100;
@@ -96,13 +96,8 @@ function newCode() {
     if (!rooms.has(c)) return c;
   }
 }
-// stesso calcolo del client: il primo carattere del codice decide il bioma
-const WORLD_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789";
-const BIOME_CAPS = [6, 6]; // un giocatore per personaggio: 6 nel mondo temperato, 6 sul pianeta alieno
-function biomeCap(code) {
-  const i = WORLD_ALPHABET.indexOf(code[0]);
-  return i < 0 || code === "test" ? 99 : BIOME_CAPS[i % BIOME_CAPS.length];
-}
+// un giocatore per personaggio: ogni bioma ha 6 personaggi (la stanza di sviluppo "test" non ha limite)
+const biomeCap = (code) => (code === "test" ? 99 : 6);
 function makeRoom(code, hostToken, cap) {
   cap = Math.min(cap, biomeCap(code));
   const r = { code, players: new Map(), hostToken, cap, places: new Set(), nextTint: 0, emptySince: null };
