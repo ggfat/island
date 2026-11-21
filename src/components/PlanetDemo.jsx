@@ -66,7 +66,7 @@ function seaMask(dir) {
     // coste frastagliate: baie e penisole invece di un cerchio perfetto
     const coast = Math.sin(dir.x * 7.3 + dir.y * 3.1 + 0.7) * Math.sin(dir.z * 6.1 - dir.y * 4.3) * 0.11 + Math.sin(dir.x * 13.7 - dir.z * 11.3) * 0.04;
     const ang = dir.angleTo(c) + coast;
-    m = Math.max(m, 1 - smoothstep(SEA_RADIUS * 0.55, SEA_RADIUS, ang));
+    m = Math.max(m, 1 - smoothstep(SEA_RADIUS * 0.6, SEA_RADIUS * 1.25, ang)); // fascia larga: costa in dolce pendenza, riva intorno a SEA_RADIUS
   }
   return m; // 1 deep inside a sea region, fading to 0 outside SEA_RADIUS
 }
@@ -99,7 +99,7 @@ function cratersAt(dir) {
   for (const c of CRATERS) {
     const d = dir.angleTo(c.c) / c.r;
     if (d > 1.6) continue;
-    h += (d < 1 ? -c.depth * (1 - d * d) : 0) + c.rim * Math.exp(-((d - 1) * (d - 1)) / 0.06);
+    h += (d < 1 ? -c.depth * (1 - d * d) : 0) + c.rim * Math.exp(-((d - 1) * (d - 1)) / 0.14); // bordo largo: pareti percorribili
   }
   return h;
 }
@@ -210,13 +210,18 @@ function configureWorld(code, style = "temperate") {
 // Superficie del mare piu' piatta del pianeta: verso il centro di ogni mare scende un po',
 // cosi' su un pianeta piccolo il mare non sembra una cupola. A riva coincide con SEA_LEVEL.
 const SEA_FLAT = 0.42;
-function seaSurfaceH(dir) {
+// conca del mare: quanto scende la superficie (e con lei tutto il bacino, fondale e rive comprese).
+// Profilo con pendenza zero sul bordo: niente gradino dove la conca comincia.
+function seaDrop(dir) {
   let drop = 0;
   for (const c of SEA_CENTERS) {
     const a = dir.angleTo(c);
-    if (a < SEA_RADIUS) drop = Math.max(drop, SEA_FLAT * PLANET_R * (SEA_RADIUS * SEA_RADIUS - a * a) * 0.5);
+    if (a < SEA_RADIUS) { const u = 1 - (a * a) / (SEA_RADIUS * SEA_RADIUS); drop = Math.max(drop, SEA_FLAT * PLANET_R * SEA_RADIUS * SEA_RADIUS * 0.5 * u * u); }
   }
-  return SEA_LEVEL - drop;
+  return drop;
+}
+function seaSurfaceH(dir) {
+  return SEA_LEVEL - seaDrop(dir);
 }
 // Piazzole: zone livellate (sotto gli edifici). Il terreno si raccorda dolcemente al livello della piazzola.
 let TERRAIN_PADS = [];
@@ -230,14 +235,25 @@ function terrainHeight(dir) {
   }
   return h;
 }
+// fascia costiera: 1 sulla riva, 0 nell'entroterra. Li' colline, montagne e crateri si spianano,
+// cosi' la costa scende dolce verso il mare invece di finire a strapiombo
+function coastBand(dir) {
+  let m = 0;
+  for (const c of SEA_CENTERS) m = Math.max(m, 1 - smoothstep(SEA_RADIUS * 1.1, SEA_RADIUS * 1.55, dir.angleTo(c)));
+  return m;
+}
 function baseTerrainHeight(dir) {
   const noise = noiseAt(dir);
   const mask = seaMask(dir);
+  const flat = 1 - coastBand(dir);
   const landH = TERRAIN_STYLE === "alien"
-    ? noise * 0.45 + 1.0 + cratersAt(dir) + mountainAt(dir) * 0.3 // crateri e altipiani (le guglie sono cristalli a parte)
-    : noise * 0.55 + 1.0 + hillsAt(dir) + mountainAt(dir); // colline e montagne vere
-  const seaH = noise * 0.3 - 9.0; // fondale profondo: la superficie del mare scende verso il centro
-  return landH * (1 - mask) + seaH * mask;
+    ? noise * 0.45 + 1.0 + (cratersAt(dir) + mountainAt(dir) * 0.3) * flat // crateri e altipiani (le guglie sono cristalli a parte)
+    : noise * 0.55 + 1.0 + (hillsAt(dir) + mountainAt(dir)) * flat; // colline e montagne vere
+  const seaH = noise * 0.3 - 3.6; // fondale: il mare e' opaco, basta che sia sotto la superficie (spiaggia dolce)
+  // spiaggia: vicino a riva il fondale scende piano (mask^2), piu' al largo diventa profondo
+  const m = mask * mask;
+  // la riva scende insieme alla superficie del mare: niente scogliere sopra l'acqua
+  return landH * (1 - m) + seaH * m - seaDrop(dir);
 }
 
 const PLANET_R = 40; // ~un terzo della superficie di prima (era 68)
@@ -673,10 +689,14 @@ export default function PlanetDemo() {
     for (let i = 0; i < 520; i++) {
       const d = randomDir();
       const h = terrainHeight(d);
-      if (h < SEA_LEVEL + 0.05) continue; // keep the beaches clear
+      if (h < seaSurfaceH(d) + 0.5) continue; // spiagge libere
       if (nearVillage(d)) continue;
       const surf = getSurfacePoint(d);
-      if (h < 4.2 && (h < 2.6 || rand() < 0.55)) {
+      // le piante crescono verso il cielo, non perpendicolari al pendio; sui pendii ripidi solo rocce
+      const upness = surf.normal.dot(d);
+      if (upness < 0.8 && rand() < 0.6) continue;
+      surf.normal = d.clone().multiplyScalar(0.9).addScaledVector(surf.normal, upness < 0.8 ? 0.0 : 0.1).normalize();
+      if (upness >= 0.8 && h < 4.2 && (h < 2.6 || rand() < 0.55)) {
         // tree
         const scale = 2.5 + rand() * 1.7;
         const group = new THREE.Group();
@@ -694,7 +714,7 @@ export default function PlanetDemo() {
         scene.add(group);
         decor.tree.push({ obj: group, pos: surf.point.clone(), quat: group.quaternion.clone(), scale: 0.8 + ((scale - 2.5) / 1.7) * 0.45 });
         obstacles.push({ dir: d.clone(), r: (0.32 * scale) / PLANET_R });
-      } else if (h < 3.4) {
+      } else if (upness >= 0.8 && h < 3.4) {
         // bush (rounded shrub, smaller than trees, tucked in the same grass/rock transition band)
         const scale = 0.5 + rand() * 0.6;
         const bush = new THREE.Mesh(new THREE.IcosahedronGeometry(0.55, 1), bushMat);
