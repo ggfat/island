@@ -149,3 +149,13 @@ La forma del pianeta (mari, montagne, colline, posizione di alberi, villaggi e l
 - Per provarlo: `/?biome=alieno` crea direttamente un mondo alieno; `/?test=1&biome=alieno` da solo con il compagno simulato.
 - Identità propria: crateri al posto delle colline, guglie di cristallo al posto delle montagne, mare viola che si illumina, pianeta con anelli e due lune nel cielo (seguono il giocatore), stelle visibili anche di giorno, alberi e cristalli che brillano di notte, cupole geodetiche al centro dei villaggi, passerelle grigio-azzurre al posto dei sentieri, lampioni azzurri, gravità bassa (salti più alti e lenti), passi metallici, luoghi speciali in cristallo con nomi spaziali.
 - Limiti: gli interni delle case sono ancora quelli di legno; i luoghi speciali cambiano colori e nomi ma non forma.
+
+
+## Livelli e missioni (aggiornato)
+
+- Tre livelli, ognuno un bioma: 1 Isola temperata, 2 Pianeta alieno, 3 Citta' abbandonata (Zombie Apocalypse Kit + Downtown City MegaKit di Quaternius, CC0, in `public/models/city/`).
+- Missioni per livello: 6 luoghi speciali da attivare in coppia + 3 oggetti da trovare dentro le case (le case con un oggetto hanno scintille dorate sopra il tetto). Completate tutte, si sblocca il livello successivo.
+- "Crea un nuovo mondo" crea sempre un mondo del proprio livello piu' alto. Gli invitati entrano nel mondo di chi invita, di qualunque livello.
+- Il bioma viaggia nel link: `?room=CODICE&bioma=temperato|alieno|citta`. Il codice decide solo la forma del pianeta (la vecchia regola della prima lettera non esiste piu').
+- Prove rapide: `/?test=1&bioma=citta` (da solo con il compagno simulato).
+- Progressi in localStorage (`island_progress`), per ora aggirabili: diventeranno sicuri con gli account.
