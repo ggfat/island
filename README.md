@@ -143,10 +143,10 @@ La forma del pianeta (mari, montagne, colline, posizione di alberi, villaggi e l
 - Interni arredati con il Fantasy Props MegaKit di Quaternius (CC0), in `public/models/props/` (solo texture di colore, ridotte a 512 px). Dentro una casa il mondo esterno viene nascosto.
 ## Biomi (branch `bioma-alieno`)
 
-- Il primo carattere del codice del mondo decide il bioma: temperato (pirati, case di legno) o pianeta alieno (Ultimate Space Kit di Quaternius, CC0, in `public/models/space/`).
+- (Superato: ora il bioma viaggia nel link, vedi "Livelli e missioni".) Biomi: temperato (pirati, case di legno) o pianeta alieno (Ultimate Space Kit di Quaternius, CC0, in `public/models/space/`).
 - Pianeta alieno: 6 personaggi (4 astronauti, l'alieno Zorp e Mako; stesso scheletro dei pirati, armi nascoste), alberi/rocce/piante aliene, case spaziali con impronte proprie, cielo rosa-viola e mare viola. Limite 6 giocatori (anche lato relay).
-- Completate le 6 missioni, "Crea un nuovo mondo" crea un pianeta alieno.
-- Per provarlo: `/?biome=alieno` crea direttamente un mondo alieno; `/?test=1&biome=alieno` da solo con il compagno simulato.
+- Il pianeta alieno e' il livello 2.
+- Per provarlo: `/?test=1&bioma=alieno` da solo con il compagno simulato.
 - Identità propria: crateri al posto delle colline, guglie di cristallo al posto delle montagne, mare viola che si illumina, pianeta con anelli e due lune nel cielo (seguono il giocatore), stelle visibili anche di giorno, alberi e cristalli che brillano di notte, cupole geodetiche al centro dei villaggi, passerelle grigio-azzurre al posto dei sentieri, lampioni azzurri, gravità bassa (salti più alti e lenti), passi metallici, luoghi speciali in cristallo con nomi spaziali.
 - Limiti: gli interni delle case sono ancora quelli di legno; i luoghi speciali cambiano colori e nomi ma non forma.
 
