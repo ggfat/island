@@ -15,7 +15,10 @@ export function loadModel(path) {
   const promise = new Promise((resolve) => {
     loader.load(
       path,
-      (gltf) => resolve(gltf),
+      (gltf) => {
+        gltf.scene.traverse((o) => { if (o.geometry) o.geometry.userData.src = path; });
+        resolve(gltf);
+      },
       undefined,
       (err) => {
         console.info(`[assetLoader] "${path}" non trovato o non caricabile, uso il fallback procedurale.`, err?.message ?? err);

@@ -17,24 +17,42 @@ function extractInstanceSources(gltf) {
   });
   return sources;
 }
+// Le copie vengono divise per zona del pianeta (6 facce x 3x3): cosi' si disegnano solo le zone
+// davanti alla telecamera e sopra l'orizzonte, invece di tutto il pianeta (anche il lato nascosto).
+function sectorOf(p) {
+  const ax = Math.abs(p.x), ay = Math.abs(p.y), az = Math.abs(p.z);
+  let f, u, v;
+  if (ax >= ay && ax >= az) { f = p.x > 0 ? 0 : 1; u = p.y / ax; v = p.z / ax; }
+  else if (ay >= az) { f = p.y > 0 ? 2 : 3; u = p.x / ay; v = p.z / ay; }
+  else { f = p.z > 0 ? 4 : 5; u = p.x / az; v = p.y / az; }
+  const g = (t) => Math.min(2, Math.floor((t + 1) * 1.5));
+  return f * 9 + g(u) * 3 + g(v);
+}
 function buildInstanced(sources, placements) {
-  const meshes = sources.map(({ geometry, material }) => {
-    const inst = new THREE.InstancedMesh(geometry, material, placements.length);
-    inst.castShadow = true;
-    inst.receiveShadow = true;
-    return inst;
-  });
+  const groups = new Map();
+  placements.forEach((p) => { const k = sectorOf(p.pos); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(p); });
+  const all = [];
   const m = new THREE.Matrix4();
   const tmp = new THREE.Matrix4();
-  placements.forEach((p, i) => {
-    m.compose(p.pos, p.quat, new THREE.Vector3(p.scale, p.scale, p.scale));
-    sources.forEach((src, sIdx) => {
-      tmp.multiplyMatrices(m, src.localMatrix);
-      meshes[sIdx].setMatrixAt(i, tmp);
+  const one = new THREE.Vector3();
+  groups.forEach((list) => {
+    const meshes = sources.map(({ geometry, material }) => {
+      const inst = new THREE.InstancedMesh(geometry, material, list.length);
+      inst.castShadow = true;
+      inst.receiveShadow = true;
+      return inst;
     });
+    list.forEach((p, i) => {
+      m.compose(p.pos, p.quat, one.set(p.scale, p.scale, p.scale));
+      sources.forEach((src, sIdx) => {
+        tmp.multiplyMatrices(m, src.localMatrix);
+        meshes[sIdx].setMatrixAt(i, tmp);
+      });
+    });
+    meshes.forEach((mm) => { mm.instanceMatrix.needsUpdate = true; mm.computeBoundingSphere(); });
+    all.push(...meshes);
   });
-  meshes.forEach((mm) => (mm.instanceMatrix.needsUpdate = true));
-  return meshes;
+  return all;
 }
 
 // ---------- Seamless pseudo-3D noise (no poles/seams, unlike lat-long noise) ----------
@@ -380,8 +398,11 @@ export default function PlanetDemo() {
     const height = mount.clientHeight;
 
     // ---------- Renderer / Scene / Camera ----------
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    // telefoni: schermi molto densi, l'antialias costa tanto e si nota poco
+    const IS_TOUCH = window.matchMedia ? window.matchMedia("(pointer: coarse)").matches : "ontouchstart" in window;
+    const DPR = window.devicePixelRatio || 1;
+    const renderer = new THREE.WebGLRenderer({ antialias: !(IS_TOUCH && DPR >= 2), powerPreference: "high-performance" });
+    renderer.setPixelRatio(Math.min(DPR, IS_TOUCH ? 1.5 : 2));
     renderer.setSize(width, height);
     renderer.shadowMap.enabled = true;
     mount.appendChild(renderer.domElement);
@@ -923,8 +944,9 @@ export default function PlanetDemo() {
         group.scale.setScalar(scale);
         orientToSurface(group, surf.normal, rand() * Math.PI * 2);
         scene.add(group);
-        decor.tree.push({ obj: group, pos: surf.point.clone(), quat: group.quaternion.clone(), scale: 0.8 + ((scale - 2.5) / 1.7) * 0.45 });
-        obstacles.push({ dir: d.clone(), r: (0.32 * scale) / PLANET_R });
+        const ob = { dir: d.clone(), r: (0.32 * scale) / PLANET_R };
+        obstacles.push(ob);
+        decor.tree.push({ obj: group, pos: surf.point.clone(), quat: group.quaternion.clone(), scale: 0.8 + ((scale - 2.5) / 1.7) * 0.45, ob });
       } else if (upness >= 0.8 && h < 3.4) {
         // bush (rounded shrub, smaller than trees, tucked in the same grass/rock transition band)
         const scale = 0.5 + rand() * 0.6;
@@ -934,8 +956,9 @@ export default function PlanetDemo() {
         bush.castShadow = true;
         orientToSurface(bush, surf.normal, rand() * Math.PI * 2);
         scene.add(bush);
-        decor.bush.push({ obj: bush, pos: surf.point.clone(), quat: bush.quaternion.clone(), scale: 0.6 + ((scale - 0.5) / 0.6) * 0.5 });
-        obstacles.push({ dir: d.clone(), r: (0.4 * scale) / PLANET_R });
+        const ob = { dir: d.clone(), r: (0.4 * scale) / PLANET_R };
+        obstacles.push(ob);
+        decor.bush.push({ obj: bush, pos: surf.point.clone(), quat: bush.quaternion.clone(), scale: 0.6 + ((scale - 0.5) / 0.6) * 0.5, ob });
       } else {
         // rock
         const scale = 0.35 + rand() * 0.4;
@@ -950,11 +973,24 @@ export default function PlanetDemo() {
       }
     }
 
+    // meno vegetazione nei mondi naturali: si sfoltisce dopo averla generata (cosi' il resto del mondo non cambia)
+    if (!CITY) {
+      const vegRand = mulberry32(hashStr((worldCode || "legacy") + "sfoltisci"));
+      const removed = new Set();
+      [["tree", 0.45], ["bush", 0.5]].forEach(([kind, drop]) => {
+        decor[kind] = decor[kind].filter((e) => {
+          if (vegRand() >= drop) return true;
+          scene.remove(e.obj); removed.add(e.ob); return false;
+        });
+      });
+      for (let i = obstacles.length - 1; i >= 0; i--) if (removed.has(obstacles[i])) obstacles.splice(i, 1);
+    }
+
     // ---------- Qualita' grafica: sui dispositivi lenti si riducono risoluzione, ombre e dettagli,
     // ma i modelli veri restano sempre (niente piu' sagome semplici). "Auto" sceglie da solo e ricorda la scelta.
     const QUALITY_LEVELS = [
-      { name: "Alta", pr: Math.min(window.devicePixelRatio || 1, 2), shadow: 1024, small: true },
-      { name: "Media", pr: Math.min(window.devicePixelRatio || 1, 1.4), shadow: 1024, small: true },
+      { name: "Alta", pr: Math.min(DPR, IS_TOUCH ? 1.5 : 2), shadow: 1024, small: true },
+      { name: "Media", pr: Math.min(DPR, IS_TOUCH ? 1.2 : 1.4), shadow: 1024, small: true },
       { name: "Bassa", pr: 1, shadow: 512, small: true },
       { name: "Minima", pr: 0.7, shadow: 0, small: false },
     ];
@@ -1000,7 +1036,7 @@ export default function PlanetDemo() {
         if (win < 3 || this.frameTimes.length < 3) return;
         const fps = this.frameTimes.length / win;
         this.frameTimes = [];
-        if (fps < 27 && this.level < QUALITY_LEVELS.length - 1) { this.goodWindows = 0; this.apply(this.level + 1); return; }
+        if (fps < (IS_TOUCH ? 40 : 27) && this.level < QUALITY_LEVELS.length - 1) { this.goodWindows = 0; this.apply(this.level + 1); return; }
         // se va molto bene risale di un livello, una sola volta per partita (evita l'altalena)
         if (fps > 56 && this.level > 0 && !this.raisedOnce) {
           if (++this.goodWindows >= 3) { this.raisedOnce = true; this.goodWindows = 0; this.apply(this.level - 1); }
@@ -2641,8 +2677,11 @@ export default function PlanetDemo() {
       gap: "18px", background: "linear-gradient(#2c4a52, #7fb0a6 70%, #e8d9a8)", color: "#fff", font: "15px system-ui, sans-serif",
       transition: "opacity 0.7s", textAlign: "center", padding: "24px",
     });
-    splash.innerHTML = '<div style="font-size:54px;font-weight:700;letter-spacing:10px;text-shadow:0 3px 12px rgba(0,0,0,.35)">ISLAND</div>' +
+    splash.innerHTML = '<style>#islTitle{font-size:54px;letter-spacing:10px}@media (max-height:480px){#islTitle{font-size:32px;letter-spacing:6px}#splashMsg{min-height:0!important}}</style>' +
+      '<div id="islTitle" style="font-weight:700;text-shadow:0 3px 12px rgba(0,0,0,.35)">ISLAND</div>' +
       '<div id="splashMsg" style="opacity:.9;max-width:300px;min-height:3em">' + entry.msg + '</div>';
+    // su schermi bassi (telefono in orizzontale) la schermata scorre invece di tagliare i pulsanti
+    Object.assign(splash.style, { justifyContent: "safe center", overflowY: "auto", gap: "14px" });
     const barWrap = document.createElement("div");
     Object.assign(barWrap.style, { width: "220px", height: "8px", borderRadius: "4px", background: "rgba(255,255,255,.25)", overflow: "hidden" });
     const barFill = document.createElement("div");
@@ -2655,12 +2694,17 @@ export default function PlanetDemo() {
       letterSpacing: "3px", cursor: "pointer", userSelect: "none", touchAction: "none",
     });
     const picker = document.createElement("div");
-    Object.assign(picker.style, { display: "flex", flexWrap: "wrap", gap: "8px", justifyContent: "center", maxWidth: "340px", margin: "0 0 18px" });
+    Object.assign(picker.style, { display: "grid", gap: "8px", justifyContent: "center", margin: "0 0 6px" });
+    const layoutPicker = () => { picker.style.gridTemplateColumns = `repeat(${(mount.clientWidth || window.innerWidth) >= 520 ? 6 : 3}, 76px)`; };
+    layoutPicker();
+    window.addEventListener("resize", layoutPicker);
     const takenChars = new Set();
     const charChips = CHAR_NAMES.map((nm, i) => {
+      // miniatura del personaggio (immagini pronte in /models/thumbs, generate con tools/make-thumbs.cjs)
       const c = document.createElement("div");
-      c.textContent = nm;
-      Object.assign(c.style, { padding: "7px 13px", borderRadius: "18px", font: "600 13px system-ui, sans-serif", cursor: "pointer", userSelect: "none", touchAction: "none", border: "2px solid rgba(255,255,255,.7)" });
+      const file = CHAR_PATHS[i % CHAR_PATHS.length].split("/").pop().replace(/\.gltf$/, ".webp");
+      c.innerHTML = `<img src="/models/thumbs/${file}" alt="" draggable="false" style="width:68px;height:68px;display:block;margin:0 auto;pointer-events:none"><div style="font:600 11px system-ui,sans-serif;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${nm}</div>`;
+      Object.assign(c.style, { width: "76px", boxSizing: "border-box", padding: "3px 2px 4px", borderRadius: "14px", cursor: "pointer", userSelect: "none", touchAction: "none", border: "2px solid rgba(255,255,255,.55)", transition: "transform .15s" });
       c.addEventListener("pointerdown", (e) => {
         e.stopPropagation();
         if (takenChars.has(i)) return;
@@ -2675,8 +2719,10 @@ export default function PlanetDemo() {
     function paintChips() {
       charChips.forEach((c, i) => {
         const t = takenChars.has(i);
-        c.style.background = i === myChar ? "#fff" : "rgba(255,255,255,.12)"; c.style.color = i === myChar ? "#2c4a52" : "#fff";
-        c.style.opacity = t ? "0.4" : "1"; c.style.textDecoration = t ? "line-through" : "none"; c.style.cursor = t ? "not-allowed" : "pointer";
+        const sel = i === myChar;
+        c.style.background = sel ? "#fff" : "rgba(255,255,255,.12)"; c.style.color = sel ? "#2c4a52" : "#fff";
+        c.style.borderColor = sel ? "#ffd35c" : "rgba(255,255,255,.55)"; c.style.transform = sel ? "scale(1.06)" : "none";
+        c.style.opacity = t ? "0.4" : "1"; c.style.filter = t ? "grayscale(1)" : "none"; c.style.textDecoration = t ? "line-through" : "none"; c.style.cursor = t ? "not-allowed" : "pointer";
         c.title = t ? "Gia' in uso in questo mondo" : "";
       });
     }
@@ -3181,11 +3227,13 @@ export default function PlanetDemo() {
       toastTimer = setTimeout(() => (toastEl.style.opacity = "0"), ms);
     }
     const menuPanel = document.createElement("div");
-    Object.assign(menuPanel.style, { position: "absolute", top: "58px", right: "12px", padding: "8px", borderRadius: "12px", display: "none", background: "rgba(35,40,38,0.78)", color: "#fff", font: "14px system-ui, sans-serif", zIndex: 23, flexDirection: "column", gap: "6px", minWidth: "170px" });
+    Object.assign(menuPanel.style, { position: "absolute", top: "58px", right: "12px", padding: "8px", borderRadius: "12px", display: "none", background: "rgba(35,40,38,0.78)", color: "#fff", font: "14px system-ui, sans-serif", zIndex: 23, gap: "6px", minWidth: "170px", maxHeight: "calc(100% - 70px)", overflowY: "auto", boxSizing: "border-box" });
+    const layoutMenu = () => { const short = (mount.clientHeight || window.innerHeight) < 480; menuPanel.style.gridTemplateColumns = short ? "1fr 1fr" : "1fr"; };
+    window.addEventListener("resize", layoutMenu);
     const menuItem = (label, fn) => {
       const c = document.createElement("div");
       c.textContent = label;
-      Object.assign(c.style, { padding: "9px 12px", borderRadius: "8px", cursor: "pointer", userSelect: "none", touchAction: "none", background: "rgba(255,255,255,0.14)" });
+      Object.assign(c.style, { padding: "9px 12px", borderRadius: "8px", cursor: "pointer", userSelect: "none", touchAction: "pan-y", background: "rgba(255,255,255,0.14)" });
       c.addEventListener("pointerdown", (e) => e.stopPropagation());
       c.addEventListener("click", (e) => { e.stopPropagation(); menuPanel.style.display = "none"; fn(); });
       menuPanel.appendChild(c);
@@ -3197,13 +3245,21 @@ export default function PlanetDemo() {
     menuBtn.addEventListener("pointerdown", (e) => {
       e.stopPropagation();
       audioPanel.style.display = "none";
-      menuPanel.style.display = menuPanel.style.display === "none" ? "flex" : "none";
+      layoutMenu();
+      menuPanel.style.display = menuPanel.style.display === "none" ? "grid" : "none";
     });
     mount.appendChild(menuBtn);
     mount.appendChild(menuPanel);
     muteBtn.addEventListener("pointerdown", () => { menuPanel.style.display = "none"; });
 
+    if (!document.getElementById("isl-css")) {
+      const st = document.createElement("style");
+      st.id = "isl-css";
+      st.textContent = ".isl-modal{touch-action:pan-y}.isl-modal>div{max-height:calc(100% - 24px);overflow-y:auto;box-sizing:border-box;-webkit-overflow-scrolling:touch}";
+      document.head.appendChild(st);
+    }
     const helpEl = document.createElement("div");
+    helpEl.className = "isl-modal";
     Object.assign(helpEl.style, { position: "absolute", inset: "0", zIndex: 55, display: "none", alignItems: "center", justifyContent: "center", background: "rgba(10,20,25,0.6)" });
     helpEl.innerHTML = '<div style="background:#fff;color:#223;max-width:340px;margin:16px;padding:20px 22px;border-radius:18px;font:14px/1.55 system-ui,sans-serif;box-shadow:0 8px 30px rgba(0,0,0,.4)">' +
       '<div style="font-size:19px;font-weight:700;margin-bottom:8px">Come si gioca</div>' +
@@ -3216,7 +3272,8 @@ export default function PlanetDemo() {
       '<div style="margin-top:14px;text-align:center"><span style="display:inline-block;padding:9px 30px;border-radius:22px;background:#2c4a52;color:#fff;font-weight:700;cursor:pointer">Capito</span></div></div>';
     mount.appendChild(helpEl);
     const showHelp = () => { helpEl.style.display = "flex"; };
-    helpEl.addEventListener("pointerdown", (e) => { e.stopPropagation(); helpEl.style.display = "none"; });
+    helpEl.addEventListener("pointerdown", (e) => e.stopPropagation());
+    helpEl.addEventListener("click", (e) => { e.stopPropagation(); helpEl.style.display = "none"; });
     function inviteLink() {
       const u = new URL(location.href);
       u.searchParams.set("room", curCode);
@@ -3226,6 +3283,7 @@ export default function PlanetDemo() {
       return u.toString();
     }
     const shareEl = document.createElement("div");
+    shareEl.className = "isl-modal";
     Object.assign(shareEl.style, { position: "absolute", inset: "0", zIndex: 56, display: "none", alignItems: "center", justifyContent: "center", background: "rgba(10,20,25,0.6)" });
     shareEl.innerHTML = '<div style="background:#fff;color:#223;width:min(360px,88%);padding:18px 20px;border-radius:18px;font:14px/1.5 system-ui,sans-serif;box-shadow:0 8px 30px rgba(0,0,0,.4)">' +
       '<div style="font-size:18px;font-weight:700;margin-bottom:6px">Invita amici</div>' +
@@ -3261,9 +3319,11 @@ export default function PlanetDemo() {
       showSplash(entry.msg || "Sei fuori dal gioco.", entry.label);
     }
     const missionsEl = document.createElement("div");
+    missionsEl.className = "isl-modal";
     Object.assign(missionsEl.style, { position: "absolute", inset: "0", zIndex: 55, display: "none", alignItems: "center", justifyContent: "center", background: "rgba(10,20,25,0.6)" });
     mount.appendChild(missionsEl);
-    missionsEl.addEventListener("pointerdown", (e) => { e.stopPropagation(); missionsEl.style.display = "none"; });
+    missionsEl.addEventListener("pointerdown", (e) => e.stopPropagation());
+    missionsEl.addEventListener("click", (e) => { e.stopPropagation(); missionsEl.style.display = "none"; });
     function showMissions() {
       const mark = (id) => (isDone(id) ? "\u2705" : "\u2B1C");
       const rows = places.map((pl) => "<div>" + mark("p:" + pl.name) + " " + pl.name + "</div>").join("");
@@ -3490,7 +3550,19 @@ export default function PlanetDemo() {
       audio.place();
       completeGoal("o:" + q.it.id, "Hai trovato: " + q.it.name, "\u{1F50E}");
     }
-    if (TEST_PARTNER) window.__info = () => ({ villages: VILLAGES.length, buildings: buildings.length, trees: decor.tree.length, places: places.length, items: questItems.length, biome: biomeKey });
+    if (TEST_PARTNER) window.__heavy = () => {
+      const by = new Map();
+      scene.traverse((o) => {
+        if (!o.isMesh || !o.visible) return;
+        const g = o.geometry; const t = (g.index ? g.index.count : g.attributes.position.count) / 3;
+        const n = o.isInstancedMesh ? o.count : 1;
+        let k = g.userData.src || o.name || o.parent?.name || g.type;
+        k = k + (o.isInstancedMesh ? " [inst]" : "") + (o.castShadow ? " [ombra]" : "");
+        const e = by.get(k) || { tris: 0, meshes: 0 }; e.tris += t * n; e.meshes++; by.set(k, e);
+      });
+      return [...by.entries()].sort((a, b) => b[1].tris - a[1].tris).slice(0, 25).map(([k, v]) => k + " " + Math.round(v.tris) + " (" + v.meshes + ")");
+    };
+    if (TEST_PARTNER) window.__info = () => ({ villages: VILLAGES.length, buildings: buildings.length, trees: decor.tree.length, places: places.length, items: questItems.length, biome: biomeKey, calls: renderer.info.render.calls, tris: renderer.info.render.triangles, geo: renderer.info.memory.geometries, tex: renderer.info.memory.textures, pr: renderer.getPixelRatio() });
     if (TEST_PARTNER) window.__enterItem = (i) => { const it = questItems[i]; if (it) enterBuilding(buildings[it.bi]); return it ? { name: it.name, spot: inside && inside.quest ? [inside.quest.x, inside.quest.z] : null } : null; };
     if (TEST_PARTNER) window.__walkTo = (x, z) => { inPos.set(x, 0, z); };
     if (TEST_PARTNER) window.__progress = () => ({ done: doneList(), level: levelOf(progress) });
@@ -3602,6 +3674,51 @@ export default function PlanetDemo() {
     let stepAcc = 0;
     let landSquash = 0;
     let wasGrounded = true;
+    // ---------- Oltre l'orizzonte non si disegna nulla ----------
+    // Gli oggetti fermi sul pianeta vengono registrati da soli; quelli dietro la curva del pianeta
+    // (o tutto l'esterno quando sei dentro una casa) vengono saltati sia nel disegno sia nelle ombre.
+    const cullList = [], cullSeen = new WeakSet();
+    const cBox = new THREE.Box3(), cSph = new THREE.Sphere(), cDir = new THREE.Vector3();
+    let cullScanT = 0, cullT = 0;
+    function cullScan() {
+      for (const o of scene.children) {
+        if (cullSeen.has(o)) continue;
+        cullSeen.add(o);
+        if (o.userData.noCull || o.isLight || o.isCamera) continue;
+        if (o.isInstancedMesh) { if (!o.boundingSphere) o.computeBoundingSphere(); cSph.copy(o.boundingSphere).applyMatrix4(o.matrixWorld); }
+        else { o.updateMatrixWorld(true); cBox.setFromObject(o); if (cBox.isEmpty()) continue; cBox.getBoundingSphere(cSph); }
+        const cl = cSph.center.length();
+        if (cl < PLANET_R * 0.7 || cl > PLANET_R + 25 || cSph.radius > 22) continue; // interni, cielo, oggetti enormi
+        const meshes = [];
+        o.traverse((c) => { if (c.isMesh || c.isPoints || c.isLine || c.isSprite) meshes.push(c); });
+        if (!meshes.length) continue;
+        cullList.push({ o, meshes, dir: cSph.center.clone().normalize(), ang: cSph.radius / PLANET_R, p0: o.position.clone(), on: true });
+      }
+    }
+    function setCulled(e, on) {
+      if (e.on === on) return;
+      e.on = on;
+      e.meshes.forEach((c) => (on ? c.layers.enable(0) : c.layers.disable(0)));
+    }
+    function updateCull(dt) {
+      cullScanT -= dt;
+      if (cullScanT <= 0) { cullScanT = 1; cullScan(); }
+      cullT -= dt;
+      if (cullT > 0) return;
+      cullT = 0.1;
+      const c = camera.position.length();
+      const indoor = c < PLANET_R * 0.5;
+      cDir.copy(camera.position).normalize();
+      // orizzonte visto dalla telecamera + quanto sporge un oggetto alto (circa 12 m)
+      const lim = Math.acos(Math.min(1, PLANET_R / Math.max(c, PLANET_R))) + 0.75;
+      for (let i = cullList.length - 1; i >= 0; i--) {
+        const e = cullList[i];
+        // se si muove o viene tolto non e' un oggetto fisso: lo lascio stare
+        if (!e.o.parent || e.o.position.distanceToSquared(e.p0) > 1e-4) { setCulled(e, true); cullList.splice(i, 1); continue; }
+        setCulled(e, !indoor && e.dir.angleTo(cDir) < lim + e.ang);
+      }
+    }
+    if (TEST_PARTNER) window.__cull = () => ({ tot: cullList.length, off: cullList.filter((e) => !e.on).length });
     const clock = new THREE.Clock();
     const dayColorTmp = new THREE.Color();
     const duskColorTmp = new THREE.Color();
@@ -3840,6 +3957,7 @@ export default function PlanetDemo() {
         if (actionRequested && nearExit) exitBuilding();
         actionRequested = false;
         syncRealAnim(moving);
+      updateCull(dt);
       renderer.render(scene, camera);
         return;
       }
@@ -3989,6 +4107,7 @@ export default function PlanetDemo() {
       camera.lookAt(charPos.clone().addScaledVector(charDir, 1.0));
 
       syncRealAnim(moving);
+      updateCull(dt);
       renderer.render(scene, camera);
     }
     animate();
@@ -4041,7 +4160,7 @@ export default function PlanetDemo() {
   }, []);
 
   return (
-    <div style={{ width: "100%", height: "100vh", position: "relative", background: "#bcd6d8", overflow: "hidden" }}>
+    <div style={{ position: "fixed", top: "env(safe-area-inset-top, 0px)", bottom: "env(safe-area-inset-bottom, 0px)", left: "env(safe-area-inset-left, 0px)", right: "env(safe-area-inset-right, 0px)", background: "#bcd6d8", overflow: "hidden" }}>
       <div ref={mountRef} style={{ width: "100%", height: "100%" }} />
       {hint && (
         <div

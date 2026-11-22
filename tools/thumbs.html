@@ -1,0 +1,34 @@
+<!doctype html><html><body style="margin:0;background:transparent">
+<canvas id="c" width="192" height="192"></canvas>
+<script type="module">
+// Genera le miniature dei personaggi (uso: node tools/make-thumbs.cjs con il server di sviluppo acceso)
+import * as THREE from "three";
+import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+const renderer = new THREE.WebGLRenderer({ canvas: document.getElementById("c"), alpha: true, antialias: true, preserveDrawingBuffer: true });
+renderer.setClearColor(0x000000, 0);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+const loader = new GLTFLoader();
+window.renderThumb = async (path) => {
+  const scene = new THREE.Scene();
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x8a7a6a, 2.2));
+  const sun = new THREE.DirectionalLight(0xffffff, 1.6); sun.position.set(2, 4, 5); scene.add(sun);
+  const g = await loader.loadAsync(path);
+  const m = g.scene;
+  m.traverse((o) => { if (o.material) (Array.isArray(o.material) ? o.material : [o.material]).forEach((mt) => { if ("metalness" in mt) mt.metalness = 0; }); });
+  const clip = g.animations.find((a) => /idle/i.test(a.name) && !/gun|weapon|sword/i.test(a.name)) || g.animations.find((a) => /idle/i.test(a.name));
+  if (clip) { const mx = new THREE.AnimationMixer(m); mx.clipAction(clip).play(); mx.update(0.4); }
+  scene.add(m);
+  m.updateMatrixWorld(true);
+  const bb = new THREE.Box3().setFromObject(m, true);
+  const h = bb.max.y - bb.min.y;
+  // inquadratura: busto e testa, leggermente di tre quarti
+  const target = new THREE.Vector3((bb.min.x + bb.max.x) / 2, bb.min.y + h * 0.62, (bb.min.z + bb.max.z) / 2);
+  const cam = new THREE.PerspectiveCamera(30, 1, 0.01, 100);
+  const dist = h * 1.9;
+  cam.position.set(target.x + dist * 0.38, target.y + h * 0.06, target.z + dist * 0.93);
+  cam.lookAt(target);
+  renderer.render(scene, cam);
+  return renderer.domElement.toDataURL("image/webp", 0.82);
+};
+window.ready = true;
+</script></body></html>
