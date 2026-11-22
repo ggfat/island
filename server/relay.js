@@ -133,11 +133,20 @@ wss.on("connection", (ws, req) => {
       else return fail(ws, "noroom");
     }
   }
+  // stesso dispositivo che rientra (es. Esci e poi Entra con un altro personaggio): la vecchia copia
+  // viene tolta subito, altrimenti resta visibile come "fantasma" finche' la sua connessione non scade
+  room.players.forEach((p) => {
+    if (p.token !== token) return;
+    room.players.delete(p.id);
+    send(p.ws, { t: "error", why: "replaced" });
+    try { p.ws.close(); } catch { /* gia' chiusa */ }
+    room.players.forEach((q) => send(q.ws, { t: "leave", id: p.id }));
+  });
   if (room.players.size >= room.cap) return fail(ws, "full");
 
   const id = nextId++;
   const isHost = room.hostToken === token;
-  const me = { id, ws, c: freeSlot(room, prefChar), d: null, f: [0, 0, 1], j: 0, m: 0, i: 0, b: -1, rx: 0, rz: 0, rh: 0, seen: Date.now(), msgs: 0, winStart: Date.now() };
+  const me = { id, ws, token, c: freeSlot(room, prefChar), d: null, f: [0, 0, 1], j: 0, m: 0, i: 0, b: -1, rx: 0, rz: 0, rh: 0, seen: Date.now(), msgs: 0, winStart: Date.now() };
   room.players.set(id, me);
   room.emptySince = null;
   send(ws, { t: "hello", id, c: me.c, room: room.code, cap: room.cap, host: isHost });
@@ -158,6 +167,8 @@ wss.on("connection", (ws, req) => {
       me.rx = num(msg.rx) ? Math.max(-30, Math.min(30, msg.rx)) : 0;
       me.rz = num(msg.rz) ? Math.max(-30, Math.min(30, msg.rz)) : 0;
       me.rh = num(msg.rh) ? msg.rh : 0;
+    } else if (msg.t === "bye") {
+      ws.close(); // uscita volontaria: libero subito il posto e il personaggio
     } else if (msg.t === "wave") {
       if (process.env.DEBUG) console.log("wave da", id);
       room.players.forEach((p) => p.id !== id && send(p.ws, { t: "wave", id }));

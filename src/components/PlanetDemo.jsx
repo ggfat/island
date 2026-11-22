@@ -240,6 +240,7 @@ BIOMES.city = {
   rocks: ["CinderBlock", "TrashBag_1", "Wheels_Stack", "Pallet_Broken"].map((n) => `/models/city/${n}.gltf`),
   bushes: ["TrafficCone_1", "TrashBag_2", "Grass_Wispy_Tall", "FireHydrant"].map((n) => `/models/city/${n}.gltf`),
   decorH: { tree: 6.5, rock: 0.7, bush: 0.8 },
+  decorMax: { rock: 1.1, bush: 0.9 }, // oggetti piatti (bancali, blocchi): misura sul lato piu' lungo
   // palazzi del Downtown City MegaKit (porta sul lato +Z), rimpiccioliti a misura di villaggio
   houses: [{ path: "/models/city/Building_Large_2.gltf", rotY: 0 }, { path: "/models/city/Building_Small_1.gltf", rotY: 0 }, { path: "/models/city/Building_Medium_2_001.gltf", rotY: 0 }],
   // palazzi grandi quanto l'isolato (la citta' e' fitta, non casette nel prato)
@@ -777,9 +778,37 @@ export default function PlanetDemo() {
     // instead of flat XZ distance (the sphere equivalent of the old system)
     const obstacles = []; // { dir: Vector3, r: angular radius in radians }
     const CHAR_ANGULAR_R = 0.35 / PLANET_R;
+    // edifici: rettangoli orientati (pareti e angoli pieni), non cerchi che lasciano scoperti gli spigoli
+    const boxObstacles = []; // { c: centro, ax, az: assi tangenti, hx, hz: mezze misure angolari }
+    const _cbP = new THREE.Vector3(), _cbD = new THREE.Vector3();
+    function pointInBuilding(p) {
+      const r = p.length();
+      _cbD.copy(p).divideScalar(r);
+      for (let i = 0; i < boxObstacles.length; i++) {
+        const b = boxObstacles[i];
+        if (r < b.rIn || r > b.rTop || _cbD.dot(b.c) < 0.9) continue;
+        if (Math.abs(_cbD.dot(b.ax) - b.ox) < b.hx + 0.25 / PLANET_R && Math.abs(_cbD.dot(b.az) - b.oz) < b.hz + 0.25 / PLANET_R) return true;
+      }
+      return false;
+    }
+    // frazione del tragitto testa->telecamera libera da edifici (1 = tutto libero)
+    function camBlockedFrac(from, to) {
+      const N = 16;
+      for (let k = 1; k <= N; k++) {
+        _cbP.lerpVectors(from, to, k / N);
+        if (pointInBuilding(_cbP)) return (k - 1) / N;
+      }
+      return 1;
+    }
     function isBlocked(testDir) {
       for (let i = 0; i < obstacles.length; i++) {
-        if (testDir.angleTo(obstacles[i].dir) < obstacles[i].r + CHAR_ANGULAR_R) return true;
+        const o = obstacles[i];
+        if (!o.placeOnly && testDir.angleTo(o.dir) < o.r + CHAR_ANGULAR_R) return true;
+      }
+      for (let i = 0; i < boxObstacles.length; i++) {
+        const b = boxObstacles[i];
+        if (testDir.dot(b.c) < 0.9) continue;
+        if (Math.abs(testDir.dot(b.ax) - b.ox) < b.hx + CHAR_ANGULAR_R && Math.abs(testDir.dot(b.az) - b.oz) < b.hz + CHAR_ANGULAR_R) return true;
       }
       return false;
     }
@@ -1058,9 +1087,22 @@ export default function PlanetDemo() {
       wrap.add(inner);
       return { ...gltf, scene: wrap };
     }
+    function normalizeMax(gltf, target) {
+      const box = new THREE.Box3().setFromObject(gltf.scene);
+      const sz = box.getSize(new THREE.Vector3());
+      const m = Math.max(sz.x, sz.y, sz.z);
+      if (!(m > 0.01)) return gltf;
+      const k = target / m;
+      const wrap = new THREE.Group();
+      const inner = gltf.scene.clone();
+      inner.scale.multiplyScalar(k);
+      inner.position.y -= box.min.y * k;
+      wrap.add(inner);
+      return { ...gltf, scene: wrap };
+    }
     function swapInReal(kind, paths) {
       Promise.all(paths.map((pth) => loadModelT(pth))).then((models) => {
-        const variants = models.filter(Boolean).map((g) => (biomeKey === "temperate" ? g : normalizeHeight(g, (BIOME.decorH || DECOR_TARGET_H)[kind])));
+        const variants = models.filter(Boolean).map((g) => (biomeKey === "temperate" ? g : BIOME.decorMax && BIOME.decorMax[kind] ? normalizeMax(g, BIOME.decorMax[kind]) : normalizeHeight(g, (BIOME.decorH || DECOR_TARGET_H)[kind])));
         if (variants.length === 0 || decor[kind].length === 0) return;
         const realMeshes = [];
         variants.forEach((gltf, vIdx) => {
@@ -1308,13 +1350,26 @@ export default function PlanetDemo() {
       scene.add(g);
       g.updateMatrixWorld(true);
 
-      // collision: several circles along the long axis
+      // ingombro per sistemare gli altri oggetti (come prima, cosi' la disposizione del mondo non cambia)
       const r = dp / 2 + 0.25;
       const n = Math.max(1, Math.round(w / dp));
       for (let i = 0; i < n; i++) {
         const x = n === 1 ? cx : T.x0 + r + ((w - 2 * r) * i) / (n - 1);
         const wp = g.localToWorld(new THREE.Vector3(x, 0, cz));
-        obstacles.push({ dir: wp.normalize(), r: r / PLANET_R });
+        obstacles.push({ dir: wp.normalize(), r: r / PLANET_R, placeOnly: true });
+      }
+      // collisione vera: il rettangolo dell'edificio (+ un filo di margine per lo zoccolo)
+      {
+        const rr = g.position.length();
+        boxObstacles.push({
+          c: g.localToWorld(new THREE.Vector3(cx, 0, cz)).normalize(),
+          ax: new THREE.Vector3(1, 0, 0).applyQuaternion(g.quaternion).normalize(),
+          az: new THREE.Vector3(0, 0, 1).applyQuaternion(g.quaternion).normalize(),
+          hx: (w / 2 + 0.2) / rr, hz: (dp / 2 + 0.2) / rr,
+        });
+        const b = boxObstacles[boxObstacles.length - 1];
+        b.ox = b.c.dot(b.ax); b.oz = b.c.dot(b.az);
+        b.rIn = rr - 2; b.rTop = rr + T.h + (T.roofH || 0) + 0.3; // fascia di altezza, per la telecamera
       }
       const doorWorld = g.localToWorld(new THREE.Vector3(0, 1.0, T.z1 + 0.3));
       const exitDir = g.localToWorld(new THREE.Vector3(0, 0, T.z1 + 1.9)).normalize();
@@ -1494,6 +1549,8 @@ export default function PlanetDemo() {
         cityPlates.push(mesh);
       });
     }
+    // un'auto non puo' stare davanti all'uscita di un palazzo (si resterebbe bloccati uscendo)
+    const nearDoor = (d, m) => buildings.some((b) => d.angleTo(b.exitDir) < m / PLANET_R);
     function buildCity() {
       const C = "/models/city/";
       const cars = ["Vehicle_Sports", "Vehicle_Pickup", "Vehicle_Truck"];
@@ -1525,7 +1582,9 @@ export default function PlanetDemo() {
           for (let k = 0; k < n; k++) {
             const da = -IN + ((k * 1.3 + 0.6) * 2 * IN) / 4, db = -IN + 0.065;
             const d = at(da, db);
-            cityProp(C + cars[Math.floor(pr() * 3)] + ".gltf", d, tB.clone().multiplyScalar(-1).addScaledVector(tA, (pr() - 0.5) * 0.2), 4.4);
+            const ci = Math.floor(pr() * 3), jit = pr() - 0.5;
+            if (nearDoor(d, 3.4)) continue;
+            cityProp(C + cars[ci] + ".gltf", d, tB.clone().multiplyScalar(-1).addScaledVector(tA, jit * 0.2), 4.4);
             obstacles.push({ dir: at(da, db - 0.026), r: 1.15 / PLANET_R }, { dir: at(da, db + 0.026), r: 1.15 / PLANET_R });
           }
           cityProp(C + "TrafficCone_1.gltf", at(IN * 0.6, IN * 0.4), tA, 0.6);
@@ -1535,9 +1594,10 @@ export default function PlanetDemo() {
         } else if (b.kind === "lot") {
           // lotto abbandonato: container, bancali, gomme, fusti
           cityProp(C + (pr() < 0.5 ? "Container_Green" : "Container_Red") + ".gltf", at((pr() - 0.5) * IN, IN * 0.35), pr() < 0.5 ? tA : tB, 4.0, 1.6);
-          [["Pallet", 1.0, 0], ["Wheels_Stack", 0.6, 0.35], ["Barrel", 1.1, 0.4], ["Pallet_Broken", 1.0, 0], ["TrashBag_1", 0.6, 0.3]].forEach(([n, f, sol], k) => {
+          // misure vere: un bancale e' largo ~1.2 m (prima veniva scalato in altezza e diventava enorme)
+          [["Pallet", 1.2, 0.6, "max"], ["Wheels_Stack", 0.9, 0.45, "h"], ["Barrel", 1.1, 0.4, "h"], ["Pallet_Broken", 1.2, 0.6, "max"], ["TrashBag_1", 0.6, 0.3, "h"]].forEach(([n, f, sol, by], k) => {
             if (pr() < 0.3) return;
-            cityProp(C + n + ".gltf", at((pr() - 0.5) * IN * 1.5, -IN * 0.3 + (pr() - 0.5) * IN * 0.6), pr() < 0.5 ? tA : tB, f, sol, "h");
+            cityProp(C + n + ".gltf", at((pr() - 0.5) * IN * 1.5, -IN * 0.3 + (pr() - 0.5) * IN * 0.6), pr() < 0.5 ? tA : tB, f, sol, by);
           });
         }
       });
@@ -1566,7 +1626,9 @@ export default function PlanetDemo() {
           const d = vert ? faceDir(F, line + off, along) : faceDir(F, along, line + off);
           if (terrainHeight(d) < seaSurfaceH(d) + 0.6) continue;
           const dirAlong = vert ? F[2] : F[1];
-          cityProp(C + cars[Math.floor(pr() * 3)] + ".gltf", d, dirAlong.clone().addScaledVector(vert ? F[1] : F[2], (pr() - 0.5) * 0.3), 4.4);
+          const ci = Math.floor(pr() * 3), jit = pr() - 0.5;
+          if (nearDoor(d, 3.4)) continue;
+          cityProp(C + cars[ci] + ".gltf", d, dirAlong.clone().addScaledVector(vert ? F[1] : F[2], jit * 0.3), 4.4);
           const t2 = dirAlong.clone().multiplyScalar(1.1 / PLANET_R);
           obstacles.push({ dir: d.clone().add(t2).normalize(), r: 1.15 / PLANET_R }, { dir: d.clone().sub(t2).normalize(), r: 1.15 / PLANET_R });
         }
@@ -1985,7 +2047,7 @@ export default function PlanetDemo() {
     }
     let waveAction = null;
     let waveUntil = 0;
-    getChar(myChar).then((g) => { if (!localModel) setLocalChar(g, myChar); });
+    { const first = myChar; getChar(first).then((g) => { if (!localModel && myChar === first) setLocalChar(g, first); }); }
 
     const blobMat = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.25 });
     const blob = new THREE.Mesh(new THREE.CircleGeometry(0.38, 16), blobMat);
@@ -2733,6 +2795,8 @@ export default function PlanetDemo() {
       try {
         const r = await fetch(relayUrl.replace(/^ws/, "http") + "/room/" + entry.code);
         const j = await r.json();
+        // la risposta puo' arrivare DOPO che sono entrato: a quel punto il personaggio "occupato" sono io
+        if (disposed || splashGone || netStarted) return;
         takenChars.clear();
         (j.taken || []).forEach((x) => takenChars.add(x));
         if (takenChars.has(myChar)) {
@@ -3086,6 +3150,7 @@ export default function PlanetDemo() {
           else entry = { mode: "create", code: worldCode, label: "CREA IL TUO MONDO", msg: "Questo mondo non esiste piu'. Puoi crearne uno nuovo." };
         } else if (why === "full") entry = { ...entry, msg: "Questo mondo e' al completo. Riprova tra poco.", label: "RIPROVA" };
         else if (why === "notest") entry = { mode: "solo", label: "ESPLORA DA SOLO", msg: "La stanza di test non e' attiva su questo server." };
+        else if (why === "replaced") entry = { ...entry, msg: "Sei entrato in questo mondo da un'altra scheda o da un altro dispositivo.", label: "RIENTRA QUI" };
         else if (why === "busy") entry = { ...entry, msg: "Il server e' molto occupato. Riprova tra poco.", label: "RIPROVA" };
         else entry = { ...entry, msg: "Impossibile entrare nel mondo (" + why + ").", label: "RIPROVA" };
         showSplash(entry.msg, entry.label);
@@ -3093,7 +3158,7 @@ export default function PlanetDemo() {
       onHello: (m) => {
         myNetId = m.id;
         if (typeof m.c === "number" && m.c !== myChar) toast("Il personaggio scelto era gia' in uso: sei " + CHAR_NAMES[m.c % CHAR_NAMES.length]);
-        if (typeof m.c === "number" && m.c !== localCharIdx) { localCharIdx = m.c; getChar(m.c).then((g) => setLocalChar(g, m.c)); }
+        if (typeof m.c === "number" && m.c !== localCharIdx) { localCharIdx = m.c; myChar = m.c; getChar(m.c).then((g) => { if (localCharIdx === m.c) setLocalChar(g, m.c); }); }
         roomName = m.room; curCode = m.room; curMode = "join"; roomCap = m.cap || 6;
         if (m.host) { curHost = true; role = role || "host"; store.set("island_role", role); store.set("island_myroom", m.room); store.set("island_myroom_biome", BIOME_SLUG[biomeKey]); myRoom = m.room; }
         else if (!role) { role = "guest"; store.set("island_role", "guest"); }
@@ -3310,6 +3375,7 @@ export default function PlanetDemo() {
       shareEl.style.display = "flex";
     }
     function leaveGame() {
+      net.send({ t: "bye" });
       net.close();
       net = { connected: false, send() {}, close() {}, reconnect() {} };
       netStarted = false;
@@ -3562,9 +3628,50 @@ export default function PlanetDemo() {
       });
       return [...by.entries()].sort((a, b) => b[1].tris - a[1].tris).slice(0, 25).map(([k, v]) => k + " " + Math.round(v.tris) + " (" + v.meshes + ")");
     };
-    if (TEST_PARTNER) window.__info = () => ({ villages: VILLAGES.length, buildings: buildings.length, trees: decor.tree.length, places: places.length, items: questItems.length, biome: biomeKey, calls: renderer.info.render.calls, tris: renderer.info.render.triangles, geo: renderer.info.memory.geometries, tex: renderer.info.memory.textures, pr: renderer.getPixelRatio() });
+    if (TEST_PARTNER) window.__info = () => ({ villages: VILLAGES.length, buildings: buildings.length, trees: decor.tree.length, places: places.length, items: questItems.length, biome: biomeKey, remotes: remotes.size, myChar, calls: renderer.info.render.calls, tris: renderer.info.render.triangles, geo: renderer.info.memory.geometries, tex: renderer.info.memory.textures, pr: renderer.getPixelRatio() });
     if (TEST_PARTNER) window.__enterItem = (i) => { const it = questItems[i]; if (it) enterBuilding(buildings[it.bi]); return it ? { name: it.name, spot: inside && inside.quest ? [inside.quest.x, inside.quest.z] : null } : null; };
     if (TEST_PARTNER) window.__walkTo = (x, z) => { inPos.set(x, 0, z); };
+    if (TEST_PARTNER) window.__exit = () => { if (inside) exitBuilding(); return !inside; };
+    if (TEST_PARTNER) window.__camIn = () => pointInBuilding(camera.position);
+    if (TEST_PARTNER) window.__goLot = (n = 0) => {
+      const lots = (typeof cityBlocks !== "undefined" ? cityBlocks : []).filter((b) => b.kind === "lot");
+      const b = lots[n % Math.max(1, lots.length)]; if (!b) return false;
+      const F = CITY_FACES[b.fi];
+      charDir.copy(faceDir(F, b.al, b.be - CITY_STEP * 0.42)).normalize();
+      const c = faceDir(F, b.al, b.be);
+      facing.copy(c.clone().sub(charDir).addScaledVector(charDir, -c.clone().sub(charDir).dot(charDir)).normalize());
+      snapOutCam = true; return true;
+    };
+    // test collisioni: punti dentro gli edifici (devono essere bloccati) e davanti alle porte (liberi)
+    if (TEST_PARTNER) window.__boxCheck = () => {
+      let inside = 0, free = 0, door = 0, doorBlocked = 0;
+      buildings.forEach((b) => {
+        const T = b.T;
+        for (let i = 0; i <= 6; i++) for (let j = 0; j <= 6; j++) {
+          const p = b.g.localToWorld(new THREE.Vector3(T.x0 + ((T.x1 - T.x0) * i) / 6, 0, T.z0 + ((T.z1 - T.z0) * j) / 6)).normalize();
+          inside++; if (!isBlocked(p)) free++;
+        }
+        door++; if (isBlocked(b.exitDir)) { doorBlocked++; const o = obstacles.find((o) => !o.placeOnly && b.exitDir.angleTo(o.dir) < o.r + CHAR_ANGULAR_R); (window.__doorWhy = window.__doorWhy || []).push(o ? "cerchio r=" + (o.r * PLANET_R).toFixed(2) + " a " + (b.exitDir.angleTo(o.dir) * PLANET_R).toFixed(2) + "m" : "rettangolo"); }
+      });
+      return { buildings: buildings.length, inside, free, door, doorBlocked };
+    };
+    // test: metto il personaggio fuori da un edificio (angolo o parete) e lo faccio camminare verso il centro
+    if (TEST_PARTNER) window.__approach = (bi, ang) => {
+      const b = buildings[bi % buildings.length], T = b.T;
+      const cx = (T.x0 + T.x1) / 2, cz = (T.z0 + T.z1) / 2, R = Math.hypot(T.x1 - T.x0, T.z1 - T.z0) / 2 + 2;
+      charDir.copy(b.g.localToWorld(new THREE.Vector3(cx + Math.cos(ang) * R, 0, cz + Math.sin(ang) * R)).normalize());
+      const c = b.g.localToWorld(new THREE.Vector3(cx, 0, cz)).normalize();
+      facing.copy(c.clone().sub(charDir).addScaledVector(charDir, -c.clone().sub(charDir).dot(charDir)).normalize());
+      snapOutCam = true;
+      return true;
+    };
+    if (TEST_PARTNER) window.__insideAny = () => {
+      for (const b of buildings) {
+        const l = b.g.worldToLocal(charDir.clone().multiplyScalar(b.g.position.length()));
+        if (l.x > b.T.x0 + 0.05 && l.x < b.T.x1 - 0.05 && l.z > b.T.z0 + 0.05 && l.z < b.T.z1 - 0.05) return true;
+      }
+      return false;
+    };
     if (TEST_PARTNER) window.__progress = () => ({ done: doneList(), level: levelOf(progress) });
     // test: mi porto sulla riva del mare i, guardando verso il largo (k = direzione di uscita)
     if (TEST_PARTNER) window.__q = () => ({ level: quality.level, mode: quality.mode, n: quality.frameTimes.length, cd: quality.cooldown, hidden: document.hidden });
@@ -3782,8 +3889,24 @@ export default function PlanetDemo() {
     function exitBuilding() {
       if (inside.quest && inside.quest.holder.parent) inside.quest.holder.parent.remove(inside.quest.holder);
       charDir = inside.returnDir.clone();
-      facing.copy(inside.returnFacing);
-      charFacing.copy(inside.returnFacing);
+      // uscendo guardo lungo il marciapiede (un po' verso la strada): cosi' la telecamera alle mie spalle
+      // ha spazio e non finisce schiacciata contro la facciata. Scelgo il lato piu' libero.
+      {
+        const out = inside.returnFacing.clone();
+        const bld = buildings[inside.bIdx];
+        const side = new THREE.Vector3(1, 0, 0).applyQuaternion(bld.g.quaternion);
+        side.addScaledVector(charDir, -side.dot(charDir)).normalize();
+        const head = charDir.clone().multiplyScalar(groundRadiusAt(charDir) + 1.4);
+        let best = out, bestFree = -1;
+        for (const sg of [1, -1]) {
+          const f = side.clone().multiplyScalar(sg).addScaledVector(out, 0.45).normalize();
+          const cam = head.clone().addScaledVector(f, -6.5 * Math.cos(0.3)).addScaledVector(charDir, 6.5 * Math.sin(0.3));
+          const free = camBlockedFrac(head, cam);
+          if (free > bestFree) { bestFree = free; best = f; }
+        }
+        facing.copy(best);
+        charFacing.copy(best);
+      }
       Object.values(rooms).forEach((r) => (r.group.visible = false));
       stage.visible = false;
       roomLight.intensity = 0;
@@ -4006,10 +4129,11 @@ export default function PlanetDemo() {
         const base = charDir.clone().multiplyScalar(groundRadiusAt(charDir) + jumpHeight);
         const fwd = mv.dot(facing), rgt = mv.dot(right);
         const attempts = [mv, new THREE.Vector3().addScaledVector(facing, fwd).normalize(), new THREE.Vector3().addScaledVector(right, rgt).normalize()];
+        const stuck = isBlocked(charDir); // se per qualche motivo sono gia' dentro un ostacolo, posso sempre uscirne
         for (const attempt of attempts) {
           if (attempt.lengthSq() < 0.0001) continue;
           const candidateDir = base.clone().addScaledVector(attempt, MOVE_SPEED * dt * curSpeed).normalize();
-          if (!isBlocked(candidateDir) && terrainHeight(candidateDir) > seaSurfaceH(candidateDir) - 0.35) {
+          if ((stuck || !isBlocked(candidateDir)) && terrainHeight(candidateDir) > seaSurfaceH(candidateDir) - 0.35) {
             charDir = candidateDir;
             moving = true;
             break;
@@ -4096,6 +4220,12 @@ export default function PlanetDemo() {
       const behind = facing.clone().multiplyScalar(-Math.cos(camPitch) * camDist);
       const above = charDir.clone().multiplyScalar(Math.sin(camPitch) * camDist + 1.4);
       const desiredCamPos = charPos.clone().add(behind).add(above);
+      // la telecamera non entra negli edifici: se tra me e lei c'e' un palazzo si avvicina
+      const camHit = camBlockedFrac(charPos.clone().addScaledVector(charDir, 1.4), desiredCamPos);
+      if (camHit < 1) {
+        desiredCamPos.lerpVectors(charPos.clone().addScaledVector(charDir, 1.4), desiredCamPos, Math.max(0.12, camHit - 0.08));
+        if (pointInBuilding(camera.position)) snapOutCam = true;
+      }
       if (snapOutCam) {
         camera.position.copy(desiredCamPos);
         camera.up.copy(charDir);
